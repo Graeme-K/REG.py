@@ -9,28 +9,42 @@ Check for updates at github.com/FabioFalcioni
 Please, report bugs and issues to fabio.falcioni@manchester.ac.uk
 coded by F.Falcioni
 """
+from pickle import TRUE
 import reg
 import numpy as np
 import matplotlib.pyplot as plt
 from optparse import OptionParser
+import csv
 
 
-def get_energies_from_file(file, file_type):
+def get_energies_from_file(file, file_type, r_coord=False):
     '''
     Function to parse .txt files containing energies at each step of a PES
+
+    Open CSV
     '''
     energies = []
-    if file_type == "txt":
+    cc = []
+    if file_type == "txt" and r_coord == False:
         with open(file, 'r') as f:
-            lines = f.readlines()[4:]
+            lines = f.readlines()
             for line in lines:
-                for value in (line.split()[1:]):
-                    energies.append(float(value))
-    elif file_type == "grep":
+                energies.append(float(line.replace('\n' ,'')))
+    elif file_type == "grep" and r_coord == False:
         with open(file, 'r') as f:
             for line in f.readlines():
                 energies.append(float(line.split(' ')[-1]))
-    return energies
+    elif file_type == "csv" and r_coord:
+        with open(file,'r') as f:
+            f_csv = csv.reader(f)
+            for row in f_csv:
+                energies.append(float(row[1]))
+                cc.append(float(row[0]))
+
+    if r_coord == False:
+        cc = np.array([i for i in range(1, len(energies) + 1)])
+
+    return energies, cc
 
 
 def find_point_between_two_points(start, end, value):
@@ -76,11 +90,9 @@ def rdp_rec(M, epsilon, pdist=deviation):
         if d > max_dist:
             index = i
             max_dist = d
-
     if max_dist > epsilon:
         r1 = rdp_rec(M[:index + 1], epsilon, pdist)
         r2 = rdp_rec(M[index:], epsilon, pdist)
-
         return np.vstack((r1[:-1], r2))
     else:
         return np.vstack((M[0], M[-1]))
@@ -89,7 +101,6 @@ def rdp_rec(M, epsilon, pdist=deviation):
 def rdp(M, epsilon=0, pdist=deviation):
     if "numpy" in str(type(M)):
         return rdp_rec(M, epsilon, pdist)
-
     return rdp_rec(np.array(M), epsilon, pdist).tolist()
 
 
@@ -140,7 +151,7 @@ def minimum_points_segment_RDP(energy, cc, epsilon):
     new_interpolated_points = []
     for j in range(1, len(new_points)):
         for i in range(0, len(cc)):
-            if cc[i] > new_points[j - 1][0] and cc[i] < new_points[j][0]:
+            if i > cc.index(new_points[j - 1][0]) and i < cc.index(new_points[j][0]):
                 interpolate_point = find_point_between_two_points(new_points[j - 1], new_points[j], cc[i])
                 new_interpolated_points.append(interpolate_point)
     y_reference = y + new_interpolated_points
@@ -190,18 +201,16 @@ def main():
 
     print(
         "RDP setup: searching for a new polyline with RMSE of confidence {} kJ/mol ...".format(option.rmse_confidence))
-    wfn_energies = get_energies_from_file(option.file, file_type='txt')
-    wfn_energies = np.array(wfn_energies) * 2625.5 #Converting in kJ/mol from a.u.
-    cc = np.array([i for i in range(1, len(wfn_energies) + 1)])
+    wfn_energies,cc = get_energies_from_file('C:\\Users\\w06498gk\\GitHub\\REG.py\\src\\PES.csv', file_type='csv',r_coord=True)
+    wfn_energies = np.array(wfn_energies) #* 2625.5 #Converting in kJ/mol from a.u.
 
     # Search for critical points in the function
-    if option.critical_points == 'AUTO':
+    if TRUE:
         tp = reg.find_critical(wfn_energies, cc, use_inflex=False, min_points=5)
         segments = reg.split_segm(wfn_energies - sum(wfn_energies) / len(wfn_energies), tp)
         cc_new = reg.split_segm(cc, tp)
     elif isinstance(option.critical_points, str):
         tp = [(int(value)) for value in option.critical_points.split(',')]
-        print(tp)
         segments = reg.split_segm(wfn_energies - sum(wfn_energies) / len(wfn_energies), tp)
         cc_new = reg.split_segm(cc, tp)
     elif not option.critical_points:
@@ -213,7 +222,7 @@ def main():
     fig = plt.figure(figsize=( 9,5))
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
     for i in range(0, len(segments)):
-        x, y, RMSE = cross_validation_RDP(segments[i], cc_new[i], rmse_confidence=option.rmse_confidence)
+        x, y, RMSE = cross_validation_RDP(segments[i], cc_new[i], rmse_confidence=0.9)
         print("RMSE Segment {} = {}".format(i + 1, RMSE))
         print("Points of the new polyline for Segment {} = {}".format(i + 1, x))
         plt.plot(x, y, marker='o', markersize=10)
