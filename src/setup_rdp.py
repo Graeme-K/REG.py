@@ -54,7 +54,7 @@ def find_point_between_two_points(start, end, value):
     slope = slope_intercept(start[0], start[1], end[0], end[1])
     intercept = start[1] - slope * start[0]
     y = slope * value + intercept
-    return y
+    return slope
 
 
 def slope_intercept(x1, y1, x2, y2):
@@ -163,12 +163,13 @@ def minimum_points_segment_RDP(energy, cc, epsilon):
     return y, x, RMSE
 
 
-def cross_validation_RDP(energy, cc, rmse_confidence=1, step_size=0.01):
+def cross_validation_RDP(energy, cc, rmse_confidence=0.01, step_size=0.01):
     '''
     Function to run the RDP algorithm X times (depending on step_size) at different values of epsilon and obtain
     obtain a function with lowest number of points at that (or below) RMSE of confidence.
     '''
     new_vector = []
+    #cc = [cor* for cor in cc]
     [new_vector.append((cc[i], energy[i])) for i in range(0, len(energy))]
     max_epsilon = find_maximum_deviation(np.array(new_vector), pdist=deviation)
     epsilon = np.arange(0, max_epsilon, step_size).tolist()
@@ -201,7 +202,7 @@ def main():
 
     print(
         "RDP setup: searching for a new polyline with RMSE of confidence {} kJ/mol ...".format(option.rmse_confidence))
-    wfn_energies,cc = get_energies_from_file('C:\\Users\\w06498gk\\GitHub\\REG.py\\src\\PES.csv', file_type='csv',r_coord=True)
+    wfn_energies,cc = get_energies_from_file('C:\\Users\\w06498gk\\GitHub\\REG.py\\src\\PES3.csv', file_type='csv',r_coord=True)
     wfn_energies = np.array(wfn_energies) #* 2625.5 #Converting in kJ/mol from a.u.
 
     # Search for critical points in the function
@@ -222,7 +223,7 @@ def main():
     fig = plt.figure(figsize=( 9,5))
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
     for i in range(0, len(segments)):
-        x, y, RMSE = cross_validation_RDP(segments[i], cc_new[i], rmse_confidence=0.9)
+        x, y, RMSE = cross_validation_RDP(segments[i], cc_new[i], rmse_confidence=0.3)
         print("RMSE Segment {} = {}".format(i + 1, RMSE))
         print("Points of the new polyline for Segment {} = {}".format(i + 1, x))
         plt.plot(x, y, marker='o', markersize=10)
@@ -231,7 +232,7 @@ def main():
         textstr = 'RMSE = {}'.format(round(RMSE, 2))
         plt.text(sum(x) / len(x), sum(y) / len(y), textstr, fontsize=12, verticalalignment='top', bbox=props)
     plt.plot(cc, wfn_energies - sum(wfn_energies) / len(wfn_energies), c='#4d4d4d', marker='o', markersize=2)
-    plt.xlabel(r'Control Coordinate (N step)')
+    plt.xlabel(r'Control Coordinate (Å)')
     plt.ylabel(r'Relative Energy (kJ $\mathrm{mol^{-1}}$)')
     plt.show()
     fig.savefig('RDP_out.png', dpi=300, bbox_inches='tight')
