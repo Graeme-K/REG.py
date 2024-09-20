@@ -14,7 +14,7 @@ saved in numbered folders) """
 
 # IMPORT LIBRARIES
 import sys
-sys.path.insert(1, '/mnt/iusers01/pp01/v69787ff/REG/')  # PLEASE INSERT THE PATH OF REG.py folder installation
+sys.path.insert(1, '/mnt/iusers01/pp01/w06498gk/1Software/REG/src')  # PLEASE INSERT THE PATH OF REG.py folder installation
 import reg
 import aimall_utils as aim_u
 import numpy as np
@@ -58,7 +58,7 @@ CHARGE_TRANSFER_POLARISATION = True  # Split the classical electrostatic term in
 DISPERSION = True  # Run DFT-D3 program to consider dispersion
 # NOTE: This only works if you have DFT-D3 program installed in the same machine https://www.chemie.uni-bonn.de/pctc/mulliken-center/software/dft-d3/
 ### DISPERSION OPTIONS ###
-DFT_D3_PATH = '/mnt/iusers01/pp01/v69787ff/DFT-D3/dftd3'  # insert path of DFT-D3 program
+DFT_D3_PATH = '/mnt/iusers01/pp01/w06498gk/1Software/DFT-D3/dftd3'  # insert path of DFT-D3 program
 DISP_FUNCTIONAL = 'B3-LYP'  # insert the functional used for D3 correction
 BJ_DAMPING = True  # Becke-Johnson Damping
 
@@ -79,57 +79,39 @@ n_terms = 4  # number of terms to rank in figures and tables
 
 # DEFINE PATHS AND FILES AUTOMATICALLY:
 cwd = str(os.getcwd())
-wfn_filelist = []
-# Get wfn files
-for k in os.walk(r"%s" % cwd):
-    for i in range(0, len(k), 1):
-        for j in range(0, len(k[i]), 1):
-            if ".wfn" in k[i][j]:
-                wfn_filelist.append(k[i][j])
 
-# Finds the root, folders and all the files within the CWD and stores them as variables:
-# 'root', 'dirs' and 'allfiles'
-folderlist = []
-i = 0
-for root, dirs, allfiles in os.walk(r'%s' % cwd):
-    for folder in dirs:
-        folderlist.append(folder)
-        i = i + 1
-
-
-
-# Find all the g16 single point energy files
-# NOTE: this works if the output files end with ".out"
-g16_out_file = []
-i = 0
-for root, dirs, allfiles in os.walk(r'%s' % cwd):
-    for file in allfiles:
-        if file.endswith('.out'):
-            g16_out_file.append(file)
-
-# Find all the REG points folders and sort them by number
+# Finding file paths and folders
+wf_file = []
+gau16_file = []
 reg_folders = []
-j = 0
-for i in range(0, len(folderlist)):
-    try:
-        if os.path.isfile((cwd + '/' + folderlist[i] + '/' + wfn_filelist[j])):
-            reg_folders.append(folderlist[i])
-            j = j + 1
-    except:
-        pass
+reg_folder_list = []
+WFX = False
+for root,_,files in os.walk("."):
+    for name in files:
+        if name.endswith(".wfn"):
+            wf_file.append(os.path.join(root,name))
+            reg_fold = root.split('/')[-1]
+            reg_folders.append(reg_fold)
+            reg_folder_list.append(root)
+        elif name.endswith(".wfx"):
+            wf_file.append(os.path.join(root,name))
+            reg_fold = root.split('/')[-1]
+            reg_folders.append(reg_fold)
+            reg_folder_list.append(root)
+            WFX = True
+            
+        elif name.endswith(".out"):
+            gau16_file.append(os.path.join(root,name))
 
-#Try to sort by number if folders are mainly written with numbers files
-try:
-    folderlist.sort(key=lambda f: int(re.sub('\D', '', f)))
-    wfn_filelist.sort(key=lambda f: int(re.sub('\D', '', f)))
-    g16_out_file.sort(key=lambda f: int(re.sub('\D', '', f)))  
-except:
-    #Except sort simply by name
-    folderlist = sorted(folderlist)
-    wfn_filelist = sorted(wfn_filelist)
-reg_folders.sort(key=lambda f: int(re.sub('\D', '', f)))
-if REVERSE:
-    reg_folders = reg_folders[::-1]
+# Sorting all folders based on REG folders
+print(wf_file)
+print(reg_folders)
+all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub('\D', '', f[0])))
+
+reg_folder,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
+    
+#if REVERSE:
+#    reg_folders = reg_folders[::-1]
 
 os.chdir(cwd)  # working directory
 # Create results directory
@@ -142,13 +124,15 @@ else:
     print("Successfully created the directory {a}/{b}_results".format(a=cwd,b=SYS))
 
 # GET ATOM LIST FROM ANY .WFN FILE:
-atoms = aim_u.get_atom_list(cwd + '/' + reg_folders[0] + '/' + wfn_filelist[0])
+if WFX:
+    atoms = aim_u.get_atom_list_wfx(wf_files[0])
+else:
+    atoms = aim_u.get_atom_list(wf_files[0])
 
 # Arrange files and folders in lists
-wfn_files = [cwd + '/' + reg_folders[i] + '/' + wfn_filelist[i] for i in range(0, len(reg_folders))]
-atomic_files = [cwd + '/' + reg_folders[i] + '/' + wfn_filelist[i][:-4] + '_atomicfiles' for i in
-                range(0, len(reg_folders))]
-g16_files = [cwd + '/' + reg_folders[i] + '/' + g16_out_file[i] for i in range(0, len(reg_folders))]
+wfn_files = wf_files # Need to edit
+atomic_files = [wf[:-4] + '_atomicfiles' for wf in wf_files]
+g16_files = g16_out_files
 xyz_files = [gauss_u.get_xyz_file(file) for file in g16_files]
 
 # Get control coordinate list
@@ -167,10 +151,13 @@ if REVERSE:
 
 ### INTRA AND INTER ENERGY TERMS ###
 
-
-# GET TOTAL ENERGY FROM THE .WFN FILES:
-total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
-total_energy_wfn = np.array(total_energy_wfn)
+# GET TOTAL ENERGY FROM THE .WFN or .WFX FILES:
+if WFX:
+    total_energy_wfn = aim_u.get_aimall_wfx_energies(wfn_files)
+    total_energy_wfn = np.array(total_energy_wfn)
+else:
+    total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
+    total_energy_wfn = np.array(total_energy_wfn)
 # GET INTRA-ATOMIC TERMS:
 iqa_intra, iqa_intra_header = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
 iqa_intra_header = np.array(iqa_intra_header)  # used for reference
