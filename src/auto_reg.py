@@ -34,7 +34,7 @@ SYS = 'SN2_ClBr_B3LYP'  # name of the system
 
 ### PES Critical points options ###
 POINTS = 4  # number of points for "find_critical" function
-AUTO = True  # Search for critical points
+AUTO = False  # Search for critical points
 turning_points = []  # manually put critical points in the PES if necessary
 # NOTE: If analysing only a single segment (i.e. the PES has no critical points) please put AUTO=False and tp=[]
 
@@ -106,7 +106,7 @@ for root,_,files in os.walk("."):
 # Sorting all folders based on REG folders
 all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub('\D', '', f[0])))
 
-reg_folder,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
+reg_folders,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
     
 #if REVERSE:
 #    reg_folders = reg_folders[::-1]
@@ -205,12 +205,9 @@ if CHARGE_TRANSFER_POLARISATION:
 ### DISPERSION ANALYSIS ###
 if DISPERSION:
     for i in range(0, len(reg_folders)):
-        if os.path.isfile((cwd + '/' + reg_folders[i] + '/' + wfn_filelist[i])):
-            os.chdir((cwd + '/' + reg_folders[i] + '/'))
-            xyz_file = gauss_u.get_xyz_file(g16_out_file[i])
-            disp_u.run_DFT_D3(DFT_D3_PATH, xyz_file, DISP_FUNCTIONAL)
-
-    folders_disp = [cwd + '/' + reg_folders[i] + '/dft-d3.log' for i in range(0, len(reg_folders))]
+        xyz_file = xyz_files[i]
+        disp_u.run_DFT_D3(DFT_D3_PATH, reg_folder_list[i], xyz_file, DISP_FUNCTIONAL)
+    folders_disp = [reg_root_list[i] + '/dft-d3.log' for i in range(0, len(reg_folders))]
     # GET INTER-ATOMIC DISPERSION TERMS:
     iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
     iqa_disp_header = np.array(iqa_disp_header)  # used for reference

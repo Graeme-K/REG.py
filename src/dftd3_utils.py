@@ -102,16 +102,36 @@ ERRORS:
 Note (06/12/2020): AIMAll works with LSDA, B3LYP, PBE, PBE0, M062X
 ###########################################################################################################
     '''
+def run_DFT_D3(program_path,reg_folder, xyz_file, functional, BJ_Damping=True):
+    '''
+###########################################################################################################
+FUNCTION: run_DFT_D3
+          run Grimme DFT-D3 program for selected xyz file given the path of the program
+
+INPUT:
+    program_path = path to DFT-D3 program
+    xyz_file = xyz format file
+    functional = functional used for
+    BJ_Dumping = Becke Johnson dumping (default=True)
+
+ERRORS:
+    'Insert a functional that works with BJ dumping and AIMAll'
+    'Insert a functional that works with AIMAll'
+
+Note (06/12/2020): AIMAll works with LSDA, B3LYP, PBE, PBE0, M062X
+###########################################################################################################
+    '''
+    
     if BJ_Damping==True:
         functional_list = ['B3-LYP','PBE0','PBE']
         if functional.upper() in functional_list:
-            os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + ' -bj -anal > dft-d3.log')
+            os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + ' -bj -anal > {}/dft-d3.log'.format(reg_folder))
         else:
             raise ValueError('Insert a functional that works with BJ dumping and AIMAll')
 
     else:
         functional_list = ['B3-LYP','M062X','PBE', 'PBE0']
         if functional.upper() in functional_list:
-            os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + ' -anal > dft-d3.log')
+            os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + ' -anal > {}/dft-d3.log'.format(reg_folder))
         else:
             raise ValueError('Insert a functional that works with AIMAll')
