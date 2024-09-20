@@ -104,8 +104,6 @@ for root,_,files in os.walk("."):
             gau16_file.append(os.path.join(root,name))
 
 # Sorting all folders based on REG folders
-print(wf_file)
-print(reg_folders)
 all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub('\D', '', f[0])))
 
 reg_folder,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
@@ -158,14 +156,23 @@ if WFX:
 else:
     total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
     total_energy_wfn = np.array(total_energy_wfn)
+
 # GET INTRA-ATOMIC TERMS:
-iqa_intra, iqa_intra_header = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
+iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
 iqa_intra_header = np.array(iqa_intra_header)  # used for reference
 iqa_intra = np.array(iqa_intra)
 # GET INTER-ATOMIC TERMS:
-iqa_inter, iqa_inter_header = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
+iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
 iqa_inter_header = np.array(iqa_inter_header)  # used for reference
 iqa_inter = np.array(iqa_inter)
+
+# RAISING VALUE ERROR FOR MISSING FILE
+missing_files = missing_intra + missing_inter
+if len(missing_files) > 0:
+    missing_file_message = 'The following files are missing:\n'
+    for missing_file in missing_files:
+        missing_file_message += missing_file + "\n"
+    raise ValueError(missing_file_message)
 
 ###############################################################################
 #                                                                             #
