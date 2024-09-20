@@ -99,10 +99,6 @@ def get_atom_list_wfx(wfx_file):
     lines = file.readlines()  # Convert file into a array of lines
     file.close()  # Close file
 
-    # ERRORS:
-    if "<Nuclear Names>" not in lines[33]:
-        raise ValueError("Atomic labels not found")  # Checks if atomic list exist inside file
-
     # GET ATOM LIST:
     for i in range(len(lines)):
         if "<Nuclear Names>" in lines[i]:
@@ -190,6 +186,7 @@ def intra_property_from_int_file(folders, prop, atom_list):
     temp3 = []  # Temporary array
     intra_properties = []  # Output
     contributions_list = []  # Output
+    missing_files = [] # Files that cannot be found
 
     # READ PROPERTIES FROM .INT FILES
     for folder in folders:
@@ -205,13 +202,21 @@ def intra_property_from_int_file(folders, prop, atom_list):
                     end = lines.index(i)
 
             if end >= len(lines):  # Checks the .int file.
-                raise ValueError('File is empty or not exist: ' + folder + "/" + atom + ".int")
+                missing_files.append(folder + "/" + atom + ".int")
+                continue
 
             lines = [lines[i] for i in range(start + 1, end)]
             for term in prop:
                 for i in lines:
                     if (term + '           ') in i:
                         temp1.append(float(i.split()[-1]))
+
+    # RAISING VALUE ERROR FOR MISSING FILE
+    if len(missing_files) > 0:
+        missing_file_message = 'The following files are missing:\n'
+        for missing_file in missing_files:
+            missing_file_message += missing_file + "\n"
+        raise ValueError(missing_file_message)
 
     # ORGANIZE ARRAY ORDER
     for j in range(len(prop)):
@@ -231,7 +236,7 @@ def intra_property_from_int_file(folders, prop, atom_list):
         for b in atom_list:
             contributions_list.append(a + '-' + b)
 
-    return intra_properties, contributions_list
+    return intra_properties, contributions_list, missing_files
 
 
 def inter_property_from_int_file(folders, prop, atom_list):
@@ -259,6 +264,7 @@ def inter_property_from_int_file(folders, prop, atom_list):
     temp3 = []  # Temporary array
     inter_properties = []  # Output
     contributions_list = []  # Output
+    missing_files = [] # Files that cannot be found
 
     for path in folders:
         for i in range(len(atom_list)):
@@ -275,13 +281,23 @@ def inter_property_from_int_file(folders, prop, atom_list):
                         end = lines.index(i)
 
                 if end >= len(lines):  # Checks the .int file.
-                    raise ValueError("File is empty or does not exist: " + path + "/" + atom1 + "_" + atom2 + ".int")
+                    missing_files.append(path + "/" + atom1 + "_" + atom2 + ".int")
+                    continue
+                    
 
                 lines = [lines[i] for i in range(start + 1, end)]
                 for term in prop:
                     for i in lines:
                         if (term + '  ') in i:
                             temp1.append(float(i.split()[-1]))
+
+    # RAISING VALUE ERROR FOR MISSING FILE
+    if len(missing_files) > 0:
+        missing_file_message = 'The following files are missing:\n'
+        for missing_file in missing_files:
+            missing_file_message += missing_file + "\n"
+        raise ValueError(missing_file_message)
+
     # ORGANIZE ARRAY ORDER
     for j in range(len(prop)):
         for i in range(j, len(temp1), len(prop)):
@@ -299,7 +315,7 @@ def inter_property_from_int_file(folders, prop, atom_list):
             for j in range(i + 1, len(atom_list)):
                 contributions_list.append(a + '-' + atom_list[i] + '_' + atom_list[j])
 
-    return inter_properties, contributions_list
+    return inter_properties, contributions_list, missing_files
 
 
 def charge_transfer_and_polarisation_from_int_file(folders, atom_list, inter_properties, xyz_files):

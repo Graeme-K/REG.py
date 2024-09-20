@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 import matplotlib.pyplot as plt
-from adjustText import adjust_text
+plt.switch_backend('agg')
 from matplotlib.ticker import MultipleLocator  
 
 def set_axis_style(ax, labels):
@@ -98,13 +98,11 @@ def generate_data_vis(file, file_list, n_term, save = False, file_name='data_vis
     temp = pos.loc[cond,:]
     n = temp.nlargest(n_term, 'REG').reset_index(drop=True)  
     text_p = [ax4.text(n['R'][i], n['REG'][i], n['TERM'][i], bbox=bbox_props) for i in range(len(n))]
-    adjust_text(text_p, arrowprops=dict(arrowstyle='->', color='black', lw=1.5)) 
 
     cond = neg.R < 0
     temp = neg.loc[cond,:]
     n = temp.nsmallest(n_term, 'REG').reset_index(drop=True)  
     text_n = [ax4.text(n['R'][i], n['REG'][i], n['TERM'][i], bbox=bbox_props) for i in range(len(n))]
-    adjust_text(text_n, arrowprops=dict(arrowstyle='->', color='black', lw=1.5))
 
     ax4.set_title('Relevant IQA contributions')
     ax4.set_xlabel(r'$R$')
@@ -167,7 +165,6 @@ def plot_segment(coordinate, wfn_energy, critical_points, label=False, color=Tru
             x_pos = coordinate[start]
             text.append(graph.text(x_pos, y_pos,  str(i+2), fontsize=14))
             start=critical_points[i]
-        adjust_text(text)
     fig.autofmt_xdate()
     if save == True:
         fig.savefig(file_name, dpi=300)

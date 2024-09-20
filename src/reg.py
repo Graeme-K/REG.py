@@ -258,8 +258,12 @@ def reg(wfn_energy, control_coord, terms, critical=True, np=5, inflex=True, crit
     #SINGLE SEGMENT REG
     if not critical_points_list and critical == False:
         for A in terms:
-            temp_REG.append(regression(wfn_energy,A,mode=mode)[0])
-            temp_pearson.append(regression(wfn_energy,A,mode=mode)[2])
+            if sum(A) == 0:
+                temp_REG.append(0)
+                temp_pearson.append(0)
+            else:
+                temp_REG.append(regression(wfn_energy,A,mode=mode)[0])
+                temp_pearson.append(regression(wfn_energy,A,mode=mode)[2])
         REG_values.append(temp_REG)
         pearson_values.append(temp_pearson)
         temp_REG = []
