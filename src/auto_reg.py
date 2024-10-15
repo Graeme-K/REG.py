@@ -30,11 +30,11 @@ import time
 start_time = time.time()
 ##############################    VARIABLES    ##################################
 
-SYS = 'SN2_ClBr_B3LYP'  # name of the system
+SYS = 'REG'  # name of the system
 
 ### PES Critical points options ###
-POINTS = 4  # number of points for "find_critical" function
-AUTO = False  # Search for critical points
+POINTS = 3  # number of points for "find_critical" function
+AUTO = True  # Search for critical points
 turning_points = []  # manually put critical points in the PES if necessary
 # NOTE: If analysing only a single segment (i.e. the PES has no critical points) please put AUTO=False and tp=[]
 
@@ -44,7 +44,7 @@ intra_prop_names = ['Eintra']  # names of the properties shown in the output
 inter_prop = ['VC_IQA(A,B)', 'VX_IQA(A,B)', 'E_IQA_Inter(A,B)']  # chose the AIMAll inter atomic properties to analyse
 inter_prop_names = ['Vcl', 'Vxc', 'Einter']  # names of the properties shown in the output
 
-REVERSE = True  # Reverse the REG points
+REVERSE = False  # Reverse the REG points
 
 INFLEX = False
 
@@ -68,6 +68,11 @@ ANNOTATE = True  # annotate figures
 DETAILED_ANALYSIS = True
 LABELS = True  # label figures
 n_terms = 4  # number of terms to rank in figures and tables
+
+
+###### REG-IQF
+IQF = True
+List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
 
 ##################################################################################
 
@@ -131,7 +136,7 @@ else:
 wfn_files = wf_files # Need to edit
 atomic_files = [wf[:-4] + '_atomicfiles' for wf in wf_files]
 g16_files = g16_out_files
-xyz_files = [gauss_u.get_xyz_file(file) for file in g16_files]
+xyz_files = [gauss_u.get_xyz_file(file) for file in g16_out_files]
 
 # Get control coordinate list
 if CONTROL_COORDINATE_TYPE == 'Scan':
@@ -157,14 +162,32 @@ else:
     total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
     total_energy_wfn = np.array(total_energy_wfn)
 
-# GET INTRA-ATOMIC TERMS:
-iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
-iqa_intra_header = np.array(iqa_intra_header)  # used for reference
-iqa_intra = np.array(iqa_intra)
-# GET INTER-ATOMIC TERMS:
-iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
-iqa_inter_header = np.array(iqa_inter_header)  # used for reference
-iqa_inter = np.array(iqa_inter)
+if IQF:
+    # GET INTRA-ATOMIC TERMS:
+    iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
+    iqa_intra_header = np.array(iqa_intra_header)  # used for reference
+    iqa_intra = np.array(iqa_intra)
+    iqf_intra = []
+    for fragment in List_of_frags:
+        frag_e = iqa_intra[(int(fragment[0]) - 1)]
+        for ind in fragment[1:]:
+            frag_e += iqa_intra[(int(ind) - 1)]
+        iqf_intra.append(frag_e)
+    iqf_intra = np.array(iqf_intra)
+    print(iqf_intra)
+    # GET INTER-ATOMIC TERMS:
+    iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
+    iqa_inter_header = np.array(iqa_inter_header)  # used for reference
+    iqa_inter = np.array(iqa_inter)
+else:
+    # GET INTRA-ATOMIC TERMS:
+    iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
+    iqa_intra_header = np.array(iqa_intra_header)  # used for reference
+    iqa_intra = np.array(iqa_intra)
+    # GET INTER-ATOMIC TERMS:
+    iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
+    iqa_inter_header = np.array(iqa_inter_header)  # used for reference
+    iqa_inter = np.array(iqa_inter)
 
 # RAISING VALUE ERROR FOR MISSING FILE
 missing_files = missing_intra + missing_inter
@@ -206,7 +229,7 @@ if CHARGE_TRANSFER_POLARISATION:
 if DISPERSION:
     for i in range(0, len(reg_folders)):
         xyz_file = xyz_files[i]
-        disp_u.run_DFT_D3(DFT_D3_PATH, reg_folder_list[i], xyz_file, DISP_FUNCTIONAL)
+        disp_u.run_DFT_D3(DFT_D3_PATH, reg_root_list[i], xyz_file, DISP_FUNCTIONAL)
     folders_disp = [reg_root_list[i] + '/dft-d3.log' for i in range(0, len(reg_folders))]
     # GET INTER-ATOMIC DISPERSION TERMS:
     iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
