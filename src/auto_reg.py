@@ -73,6 +73,7 @@ n_terms = 4  # number of terms to rank in figures and tables
 ###### REG-IQF
 IQF = True
 List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
+Frag_names = ["C_pi","H_pi","F-"]
 
 ##################################################################################
 
@@ -167,18 +168,49 @@ if IQF:
     iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
     iqa_intra_header = np.array(iqa_intra_header)  # used for reference
     iqa_intra = np.array(iqa_intra)
-    iqf_intra = []
-    for fragment in List_of_frags:
-        frag_e = iqa_intra[(int(fragment[0]) - 1)]
-        for ind in fragment[1:]:
-            frag_e += iqa_intra[(int(ind) - 1)]
-        iqf_intra.append(frag_e)
-    iqf_intra = np.array(iqf_intra)
-    print(iqf_intra)
     # GET INTER-ATOMIC TERMS:
     iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
     iqa_inter_header = np.array(iqa_inter_header)  # used for reference
     iqa_inter = np.array(iqa_inter)
+
+    no_inter =int(len(iqa_inter_header) / len(inter_prop))
+    N_frag = int(len(List_of_frags))
+    # ADD INTRA AND INTER TERMS TO OBTAIN IQF
+    iqf_intra = []
+    iqf_intra_header = []
+    for fragment,frag_nam in zip(List_of_frags,Frag_names):
+        fragment = np.sort(fragment)
+        frag_e = iqa_intra[(int(fragment[0]) - 1)].copy()
+        for ind in fragment[1:]:
+            frag_e += iqa_intra[(int(ind) - 1)]
+        iqf_intra.append(frag_e)
+        iqf_intra_header.append(str(frag_nam) + "_intra")
+    iqf_intra = np.array(iqf_intra)
+    iqf_intra_header = np.array(iqf_intra_header)
+
+    iqf_inter = np.zeros((int(((N_frag*(N_frag - 1)) / 2) * len(inter_prop)),int(len(iqf_intra[0]))),dtype=float)
+    iqf_inter_header = []
+    fin_indx = int(-1)
+    for f1_indx in range(len(List_of_frags)):
+        for f2_indx in range(len(List_of_frags)):
+            fin_indx += 1
+            for atom1 in List_of_frags[f1_indx]:
+                for atom2 in List_of_frags[f2_indx]:
+                    for prop_indx in range(len(inter_prop)):
+                        if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != int(len(inter_prop)-1)):
+                            iqf_intra[f1_indx] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+                        elif (atom1 < atom2):
+                            F1_ID = f1_indx + 1
+                            F2_ID = f2_indx + 1
+                            iqf_inter[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+    for prop in inter_prop:
+        for f1_indx in range(len(List_of_frags)):
+            for f2_indx in range((f1_indx + 1),len(List_of_frags)):   
+                iqf_inter_header.append(str(prop) + "_" + str(Frag_names[f1_indx] + "_" + Frag_names[f2_indx]))
+
+    iqf_inter_header = np.array(iqf_inter_header)
+
+
 else:
     # GET INTRA-ATOMIC TERMS:
     iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
@@ -209,6 +241,18 @@ reg_intra = reg.reg(total_energy_wfn, cc, iqa_intra, np=POINTS, critical=AUTO, i
 # INTER ATOMIC CONTRIBUTION
 reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
                     critical_index=turning_points)
+
+reg_iqf_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                    critical_index=turning_points)
+
+reg_iqf_inter = reg.reg(total_energy_wfn, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                    critical_index=turning_points)
+
+
+print(reg_intra)
+print(reg_iqf_intra)
+print(reg_inter)
+print(reg_iqf_inter)
 
 # GET CT and PL TERMS:
 if CHARGE_TRANSFER_POLARISATION:
@@ -287,6 +331,8 @@ if WRITE:
         properties_comparison = []
         df_inter = rv.create_term_dataframe(reg_inter, iqa_inter_header,i)
         df_intra = rv.create_term_dataframe(reg_intra, iqa_intra_header, i)
+        print(df_inter)
+        print(df_intra)
         for j in range(len(inter_prop)):
             df_property = rv.filter_term_dataframe(df_inter, inter_prop[j], inter_prop_names[j])
             if j <= 1:
