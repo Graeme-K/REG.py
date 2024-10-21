@@ -33,7 +33,7 @@ start_time = time.time()
 SYS = 'REG'  # name of the system
 
 ### PES Critical points options ###
-POINTS = 3  # number of points for "find_critical" function
+POINTS = 2  # number of points for "find_critical" function
 AUTO = True  # Search for critical points
 turning_points = []  # manually put critical points in the PES if necessary
 # NOTE: If analysing only a single segment (i.e. the PES has no critical points) please put AUTO=False and tp=[]
@@ -71,7 +71,7 @@ n_terms = 4  # number of terms to rank in figures and tables
 
 
 ###### REG-IQF
-IQF = True
+IQF = False
 List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
 
 ##################################################################################
@@ -306,6 +306,7 @@ if WRITE:
         final_properties_comparison.append(properties_comparison)
 
     # DISPERSION OUTPUT
+    disp_dic = {}
     if DISPERSION:
         df_dispersion_sorted = pd.DataFrame()
         disp_name_old = 'E_Disp(A,B)'
@@ -313,6 +314,7 @@ if WRITE:
         for i in range(len(reg_inter[0])):
             df_disp = rv.create_term_dataframe(reg_disp, iqa_disp_header,i)
             df_disp_new = rv.filter_term_dataframe(df_disp, disp_name_old, disp_name_new)
+            disp_dic["Seg_" + str(i)] = df_disp_new
             df_disp_new.to_csv(disp_name_new + "_seg_" + str(i + 1) + ".csv", sep=',')
             df_disp_new.to_excel(writer, sheet_name=disp_name_new + "_seg_" + str(i + 1))
             df_disp_new.dropna(axis=0, how='any', subset=None,
@@ -368,7 +370,8 @@ if WRITE:
         for j in range(3):
             df_final = pd.concat([df_final, final_properties_comparison[i][j]])
         if DISPERSION:
-            df_final = pd.concat([df_final, df_disp_new])
+            df_disp_seg = disp_dic["Seg_" + str(i)]
+            df_final = pd.concat([df_final, df_disp_seg])
         dataframe_list.append(df_final)
         df_final = df_final.sort_values('REG').reset_index(drop=True)
         df_final_sorted = pd.concat([df_final_sorted.reset_index(drop=True),
