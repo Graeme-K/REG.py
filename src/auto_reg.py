@@ -53,9 +53,9 @@ CONTROL_COORDINATE_TYPE = ''  # 'Scan' or 'IRC'. If empty ('') then default will
 Scan_Atoms = [1, 6]  # list of the atoms used for PES Scan (i.e. ModRedundant option in Gaussian)
 IRC_output = ''  # insert the g16 output file path if using IRC as control coordinate
 
-CHARGE_TRANSFER_POLARISATION = True  # Split the classical electrostatic term into polarisation and monopolar charge-transfer
+CHARGE_TRANSFER_POLARISATION = False  # Split the classical electrostatic term into polarisation and monopolar charge-transfer
 
-DISPERSION = True  # Run DFT-D3 program to consider dispersion
+DISPERSION = False  # Run DFT-D3 program to consider dispersion
 # NOTE: This only works if you have DFT-D3 program installed in the same machine https://www.chemie.uni-bonn.de/pctc/mulliken-center/software/dft-d3/
 ### DISPERSION OPTIONS ###
 DFT_D3_PATH = '/mnt/iusers01/pp01/w06498gk/1Software/DFT-D3/dftd3'  # insert path of DFT-D3 program
@@ -184,31 +184,32 @@ if IQF:
         for ind in fragment[1:]:
             frag_e += iqa_intra[(int(ind) - 1)]
         iqf_intra.append(frag_e)
-        iqf_intra_header.append(str(frag_nam) + "_intra")
+        iqf_intra_header.append(str(intra_prop[0]) + str(frag_nam) + "_intra")
     iqf_intra = np.array(iqf_intra)
-    iqf_intra_header = np.array(iqf_intra_header)
+    iqa_intra_header = np.array(iqf_intra_header)
 
     iqf_inter = np.zeros((int(((N_frag*(N_frag - 1)) / 2) * len(inter_prop)),int(len(iqf_intra[0]))),dtype=float)
     iqf_inter_header = []
-    fin_indx = int(-1)
+
     for f1_indx in range(len(List_of_frags)):
         for f2_indx in range(len(List_of_frags)):
-            fin_indx += 1
             for atom1 in List_of_frags[f1_indx]:
                 for atom2 in List_of_frags[f2_indx]:
                     for prop_indx in range(len(inter_prop)):
                         if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != int(len(inter_prop)-1)):
                             iqf_intra[f1_indx] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
-                        elif (atom1 < atom2):
+                        elif (f1_indx != f2_indx) and (atom1 < atom2):
                             F1_ID = f1_indx + 1
                             F2_ID = f2_indx + 1
                             iqf_inter[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+
     for prop in inter_prop:
         for f1_indx in range(len(List_of_frags)):
             for f2_indx in range((f1_indx + 1),len(List_of_frags)):   
                 iqf_inter_header.append(str(prop) + "_" + str(Frag_names[f1_indx] + "_" + Frag_names[f2_indx]))
 
-    iqf_inter_header = np.array(iqf_inter_header)
+
+    iqa_inter_header = np.array(iqf_inter_header)
 
 
 else:
@@ -220,6 +221,10 @@ else:
     iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
     iqa_inter_header = np.array(iqa_inter_header)  # used for reference
     iqa_inter = np.array(iqa_inter)
+
+iqa_intra = iqf_intra
+iqa_inter = iqf_inter
+
 
 # RAISING VALUE ERROR FOR MISSING FILE
 missing_files = missing_intra + missing_inter
@@ -235,24 +240,21 @@ if len(missing_files) > 0:
 #                                                                             #
 ###############################################################################
 
-# INTRA ATOMIC CONTRIBUTION
-reg_intra = reg.reg(total_energy_wfn, cc, iqa_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
-                    critical_index=turning_points)
-# INTER ATOMIC CONTRIBUTION
-reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
-                    critical_index=turning_points)
+if IQF:
+    reg_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
 
-reg_iqf_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
-                    critical_index=turning_points)
+    reg_inter = reg.reg(total_energy_wfn, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
 
-reg_iqf_inter = reg.reg(total_energy_wfn, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
-                    critical_index=turning_points)
+else:
+    # INTRA ATOMIC CONTRIBUTION
+    reg_intra = reg.reg(total_energy_wfn, cc, iqa_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
+    # INTER ATOMIC CONTRIBUTION
+    reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
 
-
-print(reg_intra)
-print(reg_iqf_intra)
-print(reg_inter)
-print(reg_iqf_inter)
 
 # GET CT and PL TERMS:
 if CHARGE_TRANSFER_POLARISATION:
@@ -321,7 +323,7 @@ if WRITE:
                                                                                           sheet_name='intra-atomic_energies')
     pd.DataFrame(data=np.array(iqa_inter).transpose(), columns=iqa_inter_header).to_excel(energy_writer,
                                                                                           sheet_name='inter-atomic_energies')
-
+    energy_writer.save()
 
     # INTER AND INTRA PROPERTIES RE-ARRANGEMENT
     list_property_final = []
@@ -331,8 +333,6 @@ if WRITE:
         properties_comparison = []
         df_inter = rv.create_term_dataframe(reg_inter, iqa_inter_header,i)
         df_intra = rv.create_term_dataframe(reg_intra, iqa_intra_header, i)
-        print(df_inter)
-        print(df_intra)
         for j in range(len(inter_prop)):
             df_property = rv.filter_term_dataframe(df_inter, inter_prop[j], inter_prop_names[j])
             if j <= 1:
