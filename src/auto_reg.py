@@ -30,7 +30,7 @@ import time
 start_time = time.time()
 ##############################    VARIABLES    ##################################
 
-SYS = 'REG'  # name of the system
+SYS = 'REG_test_frag'  # name of the system
 
 ### PES Critical points options ###
 POINTS = 3  # number of points for "find_critical" function
@@ -55,7 +55,7 @@ IRC_output = ''  # insert the g16 output file path if using IRC as control coord
 
 CHARGE_TRANSFER_POLARISATION = False  # Split the classical electrostatic term into polarisation and monopolar charge-transfer
 
-DISPERSION = False  # Run DFT-D3 program to consider dispersion
+DISPERSION = True  # Run DFT-D3 program to consider dispersion
 # NOTE: This only works if you have DFT-D3 program installed in the same machine https://www.chemie.uni-bonn.de/pctc/mulliken-center/software/dft-d3/
 ### DISPERSION OPTIONS ###
 DFT_D3_PATH = '/mnt/iusers01/pp01/w06498gk/1Software/DFT-D3/dftd3'  # insert path of DFT-D3 program
@@ -73,7 +73,7 @@ n_terms = 4  # number of terms to rank in figures and tables
 ###### REG-IQF
 IQF = True
 List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
-Frag_names = ["C_pi","H_pi","F-"]
+Frag_names = ["C(pi)","H(pi)","F-"]
 
 ##################################################################################
 
@@ -163,6 +163,122 @@ else:
     total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
     total_energy_wfn = np.array(total_energy_wfn)
 
+def sum_into_fragments(fragment_names,fragment_atom_list,int_prop_skp=True,inter_terms=[],inter_prop=[],intra_terms=[],intra_prop=[]):
+    """
+    ###########################################################################################################
+    FUNCTION: sum_iqa_into_fragments
+              Adds intra and inter terms together into fragment energies.
+
+    INPUT: fragment_names,fragment_atom_list,inter_terms,inter_headers,intra_terms,intra_headers
+        fragment_names      : List of fragment labels
+        fragment_atom_list  : List of atoms (number only) in each fragment
+        inter_terms         : Interatomic terms as numpy array
+        inter_prop          : List of interatomic properties
+        intra_terms         : Intraatomic terms as numpy array
+        intra_prop          : List of intraatomic properties
+        int_prop_skp        : True, skips the last inter prop when summing inter properties, required if you have
+                              [Vxc,Vcl,E_inter], adding all energies together results in double counting
+
+    OUTPUT: [iqf_intra,iqf_intra_headers,iqf_inter,iqf_inter_headers]
+        iqf_inter           : Inter-fragment terms as numpy array
+        iqf_inter_headers   : Headers for inter-fragment terms as numpy array
+        iqf_inter_comps     : The terms that make up the total inter-fragment term
+        iqf_inter_comp_head : Headers for terms making up total inter-fragment term
+        iqf_intra           : Intra-fragment terms as numpy array
+        iqf_intra_headers   : Headers for intra-fragment terms as numpy array
+        iqf_intra_comps     : The terms that make up the total intra-fragment term
+        iqf_intra_comp_head : Headers for terms making up total intra-fragment term
+
+
+    ERROR:
+
+    ###########################################################################################################
+    """
+    # Obtain number of interatomic properties
+    n_prop = len(inter_prop)
+    # Work out number of inter-atomic terms per property
+    no_inter =int(len(inter_terms) / n_prop)
+    # The number of fragments that the atomic properties will be summed into
+    N_frag = int(len(fragment_atom_list))
+
+    # Summing all intra terms into fragments
+    iqf_intra = []
+    iqf_intra_header = []
+    iqf_intra_comps = [ [] for frag in fragment_atom_list]
+    iqf_intra_comp_head = [ [] for frag in fragment_atom_list]
+
+    f_indx = 0
+    if len(intra_prop) > 0:
+        iqf_intra = []
+        iqf_intra_header = []
+        for fragment,frag_nam in zip(fragment_atom_list,fragment_names):
+            fragment = np.sort(fragment)
+            frag_e = intra_terms[(int(fragment[0]) - 1)].copy()
+            iqf_intra_comps[f_indx].append(intra_terms[(int(fragment[0]) - 1)].copy())
+            iqf_intra_comp_head[f_indx].append(str(fragment[0]) + "_intra")
+            for atom_ind in fragment[1:]:
+                frag_e += intra_terms[(int(atom_ind) - 1)].copy()
+                iqf_intra_comps[f_indx].append(intra_terms[(int(atom_ind) - 1)].copy())
+                iqf_intra_comp_head[f_indx].append(str(atom_ind) + "_intra")
+            iqf_intra.append(frag_e)
+            iqf_intra_header.append(str(intra_prop[0]) + "_" + str(frag_nam) + "_intra")
+            f_indx += 1
+
+    iqf_intra = np.array(iqf_intra)
+
+    # Summing all inter terms into intra-fragment terms and inter-fragment terms
+    # Setting the index to skip when summing intra terms
+    if int_prop_skp:
+        prop_skp_no = int(n_prop-1)
+    else:
+        prop_skp_no = int(-1)
+    
+    iqf_inter = np.zeros((int(((N_frag*(N_frag - 1)) / 2) * n_prop),int(len(inter_terms[0]))),dtype=float)
+    iqf_inter_comps = [[] for _ in range(int(((N_frag*(N_frag - 1)) / 2) * n_prop))]
+    iqf_inter_comp_head = [[] for _ in range(int(((N_frag*(N_frag - 1)) / 2) * n_prop))]
+    iqf_inter_header = []
+
+    # Iterating through fragments to obtain final intra and inter terms
+    for f1_indx in range(len(fragment_atom_list)):
+        for f2_indx in range(len(fragment_atom_list)):
+            for atom1 in fragment_atom_list[f1_indx]:
+                for atom2 in fragment_atom_list[f2_indx]:
+                    for prop_indx in range(n_prop):
+                        if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != prop_skp_no) and (len(intra_prop) > 0):
+                            iqf_intra[f1_indx] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+                            iqf_intra_comps[f1_indx].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
+                            iqf_intra_comp_head[f1_indx].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
+                        elif (f1_indx != f2_indx) and (atom1 < atom2):
+                            F1_ID = f1_indx + 1
+                            F2_ID = f2_indx + 1
+                            iqf_inter[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+                            iqf_inter_comps[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
+                            iqf_inter_comp_head[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
+
+    # Creating list of iqf inter headers
+    for prop in inter_prop:
+        for f1_indx in range(len(fragment_atom_list)):
+            for f2_indx in range((f1_indx + 1),len(fragment_atom_list)):   
+                iqf_inter_header.append(str(prop) + "_" + str(fragment_names[f1_indx] + "_" + fragment_names[f2_indx]))
+
+    iqf_inter_comps_np = []
+    iqf_inter_comp_head_np = []
+    for comp_list, head_list in zip(iqf_inter_comps, iqf_inter_comp_head):
+        comp_np = np.array(comp_list)
+        head_np = np.array(head_list)
+        iqf_inter_comps_np.append(comp_np)
+        iqf_inter_comp_head_np.append(head_np)
+    
+    iqf_intra_comps_np = []
+    iqf_intra_comp_head_np = []
+    for comp_list, head_list in zip(iqf_intra_comps, iqf_intra_comp_head):
+        comp_np = np.array(comp_list)
+        head_np = np.array(head_list)
+        iqf_intra_comps_np.append(comp_np)
+        iqf_intra_comp_head_np.append(head_np)
+
+    return iqf_inter, iqf_inter_header, iqf_inter_comps_np, iqf_inter_comp_head_np, iqf_intra, iqf_intra_header, iqf_intra_comps_np, iqf_intra_comp_head_np
+
 if IQF:
     # GET INTRA-ATOMIC TERMS:
     iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
@@ -173,43 +289,11 @@ if IQF:
     iqa_inter_header = np.array(iqa_inter_header)  # used for reference
     iqa_inter = np.array(iqa_inter)
 
-    no_inter =int(len(iqa_inter_header) / len(inter_prop))
-    N_frag = int(len(List_of_frags))
-    # ADD INTRA AND INTER TERMS TO OBTAIN IQF
-    iqf_intra = []
-    iqf_intra_header = []
-    for fragment,frag_nam in zip(List_of_frags,Frag_names):
-        fragment = np.sort(fragment)
-        frag_e = iqa_intra[(int(fragment[0]) - 1)].copy()
-        for ind in fragment[1:]:
-            frag_e += iqa_intra[(int(ind) - 1)]
-        iqf_intra.append(frag_e)
-        iqf_intra_header.append(str(intra_prop[0]) + str(frag_nam) + "_intra")
-    iqf_intra = np.array(iqf_intra)
+    iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head = sum_into_fragments(Frag_names,List_of_frags,True,iqa_inter,inter_prop,iqa_intra,intra_prop)
+
     iqa_intra_header = np.array(iqf_intra_header)
-
-    iqf_inter = np.zeros((int(((N_frag*(N_frag - 1)) / 2) * len(inter_prop)),int(len(iqf_intra[0]))),dtype=float)
-    iqf_inter_header = []
-
-    for f1_indx in range(len(List_of_frags)):
-        for f2_indx in range(len(List_of_frags)):
-            for atom1 in List_of_frags[f1_indx]:
-                for atom2 in List_of_frags[f2_indx]:
-                    for prop_indx in range(len(inter_prop)):
-                        if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != int(len(inter_prop)-1)):
-                            iqf_intra[f1_indx] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
-                        elif (f1_indx != f2_indx) and (atom1 < atom2):
-                            F1_ID = f1_indx + 1
-                            F2_ID = f2_indx + 1
-                            iqf_inter[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += iqa_inter[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
-
-    for prop in inter_prop:
-        for f1_indx in range(len(List_of_frags)):
-            for f2_indx in range((f1_indx + 1),len(List_of_frags)):   
-                iqf_inter_header.append(str(prop) + "_" + str(Frag_names[f1_indx] + "_" + Frag_names[f2_indx]))
-
-
     iqa_inter_header = np.array(iqf_inter_header)
+
 
 
 else:
@@ -281,6 +365,7 @@ if DISPERSION:
     iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
     iqa_disp_header = np.array(iqa_disp_header)  # used for reference
     iqa_disp = np.array(iqa_disp)
+    iqa_disp, iqa_disp_header, iqa_disp_comps, iqf_inter_comp_head, _, _, _, _ = sum_into_fragments(Frag_names,List_of_frags,False,iqa_disp,['E_Disp(A,B)'])  #### To remove
     # REG
     reg_disp = reg.reg(total_energy_wfn, cc, iqa_disp, np=POINTS, critical=AUTO, inflex=INFLEX,
                        critical_index=turning_points)
@@ -323,7 +408,6 @@ if WRITE:
                                                                                           sheet_name='intra-atomic_energies')
     pd.DataFrame(data=np.array(iqa_inter).transpose(), columns=iqa_inter_header).to_excel(energy_writer,
                                                                                           sheet_name='inter-atomic_energies')
-    energy_writer.save()
 
     # INTER AND INTRA PROPERTIES RE-ARRANGEMENT
     list_property_final = []
