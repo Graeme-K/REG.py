@@ -30,7 +30,7 @@ import time
 start_time = time.time()
 ##############################    VARIABLES    ##################################
 
-SYS = 'REG_test_frag'  # name of the system
+SYS = 'IQF_REG_TEST3'  # name of the system
 
 ### PES Critical points options ###
 POINTS = 2  # number of points for "find_critical" function
@@ -65,15 +65,26 @@ BJ_DAMPING = True  # Becke-Johnson Damping
 WRITE = True  # write csv files for energy values and REG analysis
 SAVE_FIG = True  # save figures
 ANNOTATE = True  # annotate figures
-DETAILED_ANALYSIS = True
+DETAILED_ANALYSIS = False
 LABELS = True  # label figures
 n_terms = 4  # number of terms to rank in figures and tables
 
 
 ###### REG-IQF
-IQF = False
-List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
-Frag_names = ["C(pi)","H(pi)","F-"]
+IQF = True
+if IQF:
+    with open('auto_reg.config') as f:
+        config_file = f.read()
+        Frag_names = re.findall(r'FRAG\s*ID\s*\d+\s*<(.*?)>',config_file) # Names of fragments
+        Frag_lists = re.findall(r'FRAG\s*ATOMS\s*\[([\d,]+)\]',config_file) # Atoms by number for fragments
+        List_of_frags = []
+        for f_list_str in Frag_lists:
+            atom_list = f_list_str.split(",")
+            int_atom_list = [int(a) for a in atom_list]
+            List_of_frags.append(int_atom_list)
+
+#List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
+#Frag_names = ["C(pi)","H(pi)","F-"]
 
 ##################################################################################
 
@@ -163,7 +174,7 @@ else:
     total_energy_wfn = aim_u.get_aimall_wfn_energies(wfn_files)
     total_energy_wfn = np.array(total_energy_wfn)
 
-def sum_into_fragments(fragment_names,fragment_atom_list,int_prop_skp=True,inter_terms=[],inter_prop=[],intra_terms=[],intra_prop=[]):
+def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True,inter_terms=[],inter_prop=[],inp_iqf_intra=[],intra_terms=[],intra_prop=[]):
     """
     ###########################################################################################################
     FUNCTION: sum_iqa_into_fragments
@@ -215,16 +226,21 @@ def sum_into_fragments(fragment_names,fragment_atom_list,int_prop_skp=True,inter
             fragment = np.sort(fragment)
             frag_e = intra_terms[(int(fragment[0]) - 1)].copy()
             iqf_intra_comps[f_indx].append(intra_terms[(int(fragment[0]) - 1)].copy())
-            iqf_intra_comp_head[f_indx].append(str(fragment[0]) + "_intra")
+            iqf_intra_comp_head[f_indx].append(str(fragment[0]))
             for atom_ind in fragment[1:]:
                 frag_e += intra_terms[(int(atom_ind) - 1)].copy()
                 iqf_intra_comps[f_indx].append(intra_terms[(int(atom_ind) - 1)].copy())
-                iqf_intra_comp_head[f_indx].append(str(atom_ind) + "_intra")
+                iqf_intra_comp_head[f_indx].append(str(atom_ind))
             iqf_intra.append(frag_e)
-            iqf_intra_header.append(str(intra_prop[0]) + "_" + str(frag_nam) + "_intra")
+            iqf_intra_header.append(str(intra_prop[0]) + "_" + str(frag_nam))
             f_indx += 1
 
-    iqf_intra = np.array(iqf_intra)
+    if (len(inp_iqf_intra) > 0) and (len(intra_prop) == 0):
+        iqf_intra = inp_iqf_intra[0]
+        iqf_intra_comps = inp_iqf_intra[1]
+        iqf_intra_comp_head = inp_iqf_intra[2]
+    else:
+        iqf_intra = np.array(iqf_intra)
 
     # Summing all inter terms into intra-fragment terms and inter-fragment terms
     # Setting the index to skip when summing intra terms
@@ -244,7 +260,7 @@ def sum_into_fragments(fragment_names,fragment_atom_list,int_prop_skp=True,inter
             for atom1 in fragment_atom_list[f1_indx]:
                 for atom2 in fragment_atom_list[f2_indx]:
                     for prop_indx in range(n_prop):
-                        if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != prop_skp_no) and (len(intra_prop) > 0):
+                        if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != prop_skp_no):
                             iqf_intra[f1_indx] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
                             iqf_intra_comps[f1_indx].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
                             iqf_intra_comp_head[f1_indx].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
@@ -261,23 +277,7 @@ def sum_into_fragments(fragment_names,fragment_atom_list,int_prop_skp=True,inter
             for f2_indx in range((f1_indx + 1),len(fragment_atom_list)):   
                 iqf_inter_header.append(str(prop) + "_" + str(fragment_names[f1_indx] + "_" + fragment_names[f2_indx]))
 
-    iqf_inter_comps_np = []
-    iqf_inter_comp_head_np = []
-    for comp_list, head_list in zip(iqf_inter_comps, iqf_inter_comp_head):
-        comp_np = np.array(comp_list)
-        head_np = np.array(head_list)
-        iqf_inter_comps_np.append(comp_np)
-        iqf_inter_comp_head_np.append(head_np)
-    
-    iqf_intra_comps_np = []
-    iqf_intra_comp_head_np = []
-    for comp_list, head_list in zip(iqf_intra_comps, iqf_intra_comp_head):
-        comp_np = np.array(comp_list)
-        head_np = np.array(head_list)
-        iqf_intra_comps_np.append(comp_np)
-        iqf_intra_comp_head_np.append(head_np)
-
-    return iqf_inter, iqf_inter_header, iqf_inter_comps_np, iqf_inter_comp_head_np, iqf_intra, iqf_intra_header, iqf_intra_comps_np, iqf_intra_comp_head_np
+    return iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head
 
 if IQF:
     # GET INTRA-ATOMIC TERMS:
@@ -289,11 +289,14 @@ if IQF:
     iqa_inter_header = np.array(iqa_inter_header)  # used for reference
     iqa_inter = np.array(iqa_inter)
 
-    iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head = sum_into_fragments(Frag_names,List_of_frags,True,iqa_inter,inter_prop,iqa_intra,intra_prop)
+    iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head = sum_into_fragments(Frag_names,List_of_frags,atoms,True,iqa_inter,inter_prop,[],iqa_intra,intra_prop)
 
     iqa_intra_header = np.array(iqf_intra_header)
     iqa_inter_header = np.array(iqf_inter_header)
 
+
+    iqa_intra = iqf_intra
+    iqa_inter = iqf_inter
 
 
 else:
@@ -305,9 +308,6 @@ else:
     iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
     iqa_inter_header = np.array(iqa_inter_header)  # used for reference
     iqa_inter = np.array(iqa_inter)
-
-iqa_intra = iqf_intra
-iqa_inter = iqf_inter
 
 
 # RAISING VALUE ERROR FOR MISSING FILE
@@ -323,22 +323,6 @@ if len(missing_files) > 0:
 #                               REG ANALYSIS                                  #
 #                                                                             #
 ###############################################################################
-
-if IQF:
-    reg_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
-                        critical_index=turning_points)
-
-    reg_inter = reg.reg(total_energy_wfn, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
-                        critical_index=turning_points)
-
-else:
-    # INTRA ATOMIC CONTRIBUTION
-    reg_intra = reg.reg(total_energy_wfn, cc, iqa_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
-                        critical_index=turning_points)
-    # INTER ATOMIC CONTRIBUTION
-    reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
-                        critical_index=turning_points)
-
 
 # GET CT and PL TERMS:
 if CHARGE_TRANSFER_POLARISATION:
@@ -365,11 +349,39 @@ if DISPERSION:
     iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
     iqa_disp_header = np.array(iqa_disp_header)  # used for reference
     iqa_disp = np.array(iqa_disp)
-    iqa_disp, iqa_disp_header, iqa_disp_comps, iqf_inter_comp_head, _, _, _, _ = sum_into_fragments(Frag_names,List_of_frags,False,iqa_disp,['E_Disp(A,B)'])  #### To remove
+    if IQF:
+        iqa_disp, iqa_disp_header, iqa_disp_comps, iqf_inter_comp_head, iqf_intra, _, iqf_intra_comps, iqf_intra_comp_hea = sum_into_fragments(Frag_names,List_of_frags,atoms,False,iqa_disp,['E_Disp(A,B)'],[iqf_intra,iqf_intra_comps,iqf_intra_comp_head])  #### To remove
+        iqa_intra = iqf_intra
     # REG
     reg_disp = reg.reg(total_energy_wfn, cc, iqa_disp, np=POINTS, critical=AUTO, inflex=INFLEX,
                        critical_index=turning_points)
     total_energy_dispersion = sum(iqa_disp)
+
+if IQF:
+    reg_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
+
+    reg_inter = reg.reg(total_energy_wfn, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
+
+else:
+    # INTRA ATOMIC CONTRIBUTION
+    reg_intra = reg.reg(total_energy_wfn, cc, iqa_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
+    # INTER ATOMIC CONTRIBUTION
+    reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                        critical_index=turning_points)
+
+### REG breakdown IQF ######
+
+if IQF:
+    iqf_intra_comp_list = []
+    for i in range(len(iqa_intra)):
+        iqf_val = iqa_intra[i]
+        iqf_comp_np = np.array(iqf_intra_comps[i])
+        reg_int = reg.reg(iqf_val,cc,iqf_comp_np,np=POINTS, critical=False, inflex=INFLEX,
+                        critical_index=[int(len(reg_intra[0][0])) - 1])
+        iqf_intra_comp_list.append(reg_int)
 
 # CALCULATE TOTAL ENERGIES
 total_energy_iqa = sum(iqa_inter[:(len(atoms)*(len(atoms)-1))]) + sum(iqa_intra[:len(atoms)])  # used to calculate the integration error
@@ -408,6 +420,14 @@ if WRITE:
                                                                                           sheet_name='intra-atomic_energies')
     pd.DataFrame(data=np.array(iqa_inter).transpose(), columns=iqa_inter_header).to_excel(energy_writer,
                                                                                           sheet_name='inter-atomic_energies')
+
+    if IQF:
+        for i,reg_intra_comp in enumerate(iqf_intra_comp_list):
+            for j in range(len(reg_intra_comp[0])):
+                df_iqf_intra = rv.create_term_dataframe(reg_intra_comp, iqf_intra_comp_head[i],j)
+                df_iqf_intra_sorted = df_iqf_intra.sort_values('REG')
+                df_iqf_intra_sorted.to_excel(writer, sheet_name= iqf_intra_header[i]+ "_seg_" + str(j + 1))
+
 
     # INTER AND INTRA PROPERTIES RE-ARRANGEMENT
     list_property_final = []
