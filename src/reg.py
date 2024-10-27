@@ -153,16 +153,18 @@ def find_critical(Y,X, min_points=3, use_inflex=False):
     critical_point = list(set(critical_point)) ## Remove duplicates and sort in crescent order
     critical_point.sort()
     
-    if len(critical_point)==0: ## checks if critical points were found. 
-        raise ValueError("No critical point found") 
 
-##    CHECKS MIN_POINTS CRITERIA
-    while critical_point[0] < min_points-1 : critical_point.remove(critical_point[0])
-    critical_point_list.append(critical_point[0])
-    for i in range(1, len(critical_point)):
-        if critical_point[i] - critical_point_list[-1] + 1 >= min_points:
-           critical_point_list.append(critical_point[i])
-       
+    if len(critical_point)==0: ## checks if critical points were found. 
+        #raise ValueError("No critical point found") 
+        critical_point_list = [ ]
+    else:
+        ##    CHECKS MIN_POINTS CRITERIA
+        while (critical_point[0] < min_points-1) and (len(critical_point)!=0) : critical_point.remove(critical_point[0])
+        critical_point_list.append(critical_point[0])
+        for i in range(1, len(critical_point)):
+            if critical_point[i] - critical_point_list[-1] + 1 >= min_points:
+                critical_point_list.append(critical_point[i])
+        
     return critical_point_list
 
 
@@ -251,7 +253,8 @@ def reg(wfn_energy, control_coord, terms, critical=True, np=5, inflex=True, crit
     #FIND CRITICAL POINTS:
     if critical == True: # Search for critical points automatically
         critical_points_list = find_critical(wfn_energy, control_coord, min_points=np, use_inflex=inflex)
-    
+        if len(critical_points_list) == 0:
+            critical = False
     else:
         critical_points_list =  critical_index #User provides the critical points index
 

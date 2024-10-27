@@ -30,7 +30,7 @@ import time
 start_time = time.time()
 ##############################    VARIABLES    ##################################
 
-SYS = 'IQF_REG_TEST3'  # name of the system
+SYS = 'REG'  # name of the system
 
 ### PES Critical points options ###
 POINTS = 2  # number of points for "find_critical" function
@@ -73,6 +73,7 @@ n_terms = 4  # number of terms to rank in figures and tables
 ###### REG-IQF
 IQF = True
 if IQF:
+    SYS = 'REG_IQF' 
     with open('auto_reg.config') as f:
         config_file = f.read()
         Frag_names = re.findall(r'FRAG\s*ID\s*\d+\s*<(.*?)>',config_file) # Names of fragments
