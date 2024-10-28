@@ -212,6 +212,8 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
     no_inter =int(len(inter_terms) / n_prop)
     # The number of fragments that the atomic properties will be summed into
     N_frag = int(len(fragment_atom_list))
+    # Number of frag - frag interactions
+    N_FF_int = int((N_frag*(N_frag - 1)) / 2)
 
     # Summing all intra terms into fragments
     iqf_intra = []
@@ -250,9 +252,9 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
     else:
         prop_skp_no = int(-1)
     
-    iqf_inter = np.zeros((int(((N_frag*(N_frag - 1)) / 2) * n_prop),int(len(inter_terms[0]))),dtype=float)
-    iqf_inter_comps = [[] for _ in range(int(((N_frag*(N_frag - 1)) / 2) * n_prop))]
-    iqf_inter_comp_head = [[] for _ in range(int(((N_frag*(N_frag - 1)) / 2) * n_prop))]
+    iqf_inter = np.zeros((int(N_FF_int * n_prop),int(len(inter_terms[0]))),dtype=float)
+    iqf_inter_comps = [[] for _ in range(int(N_FF_int * n_prop))]
+    iqf_inter_comp_head = [[] for _ in range(int(N_FF_int * n_prop))]
     iqf_inter_header = []
 
     # Iterating through fragments to obtain final intra and inter terms
@@ -268,9 +270,9 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
                         elif (f1_indx != f2_indx) and (atom1 < atom2):
                             F1_ID = f1_indx + 1
                             F2_ID = f2_indx + 1
-                            iqf_inter[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
-                            iqf_inter_comps[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
-                            iqf_inter_comp_head[int((prop_indx*N_frag)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
+                            iqf_inter[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
+                            iqf_inter_comps[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
+                            iqf_inter_comp_head[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
 
     # Creating list of iqf inter headers
     for prop in inter_prop:
