@@ -229,11 +229,11 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
             fragment = np.sort(fragment)
             frag_e = intra_terms[(int(fragment[0]) - 1)].copy()
             iqf_intra_comps[f_indx].append(intra_terms[(int(fragment[0]) - 1)].copy())
-            iqf_intra_comp_head[f_indx].append(str(fragment[0]))
+            iqf_intra_comp_head[f_indx].append(str(atoms[fragment[0]-1]))
             for atom_ind in fragment[1:]:
                 frag_e += intra_terms[(int(atom_ind) - 1)].copy()
                 iqf_intra_comps[f_indx].append(intra_terms[(int(atom_ind) - 1)].copy())
-                iqf_intra_comp_head[f_indx].append(str(atom_ind))
+                iqf_intra_comp_head[f_indx].append(str(atoms[atom_ind - 1]))
             iqf_intra.append(frag_e)
             iqf_intra_header.append(str(intra_prop[0]) + "_" + str(frag_nam))
             f_indx += 1
@@ -266,13 +266,13 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
                         if (f1_indx == f2_indx) and (atom1 < atom2) and (prop_indx != prop_skp_no):
                             iqf_intra[f1_indx] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
                             iqf_intra_comps[f1_indx].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
-                            iqf_intra_comp_head[f1_indx].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
+                            iqf_intra_comp_head[f1_indx].append(str(atoms[atom1 - 1]) + "-" + str(atoms[atom2 - 1]) + "_" + str(inter_prop[prop_indx]))
                         elif (f1_indx != f2_indx) and (atom1 < atom2):
                             F1_ID = f1_indx + 1
                             F2_ID = f2_indx + 1
                             iqf_inter[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
                             iqf_inter_comps[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
-                            iqf_inter_comp_head[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atom1) + "-" + str(atom2) + "_" + str(inter_prop[prop_indx]))
+                            iqf_inter_comp_head[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atoms[atom1 - 1]) + "-" + str(atoms[atom2 - 1]) + "_" + str(inter_prop[prop_indx]))
 
     # Creating list of iqf inter headers
     for prop in inter_prop:
@@ -326,6 +326,12 @@ if len(missing_files) > 0:
 #                               REG ANALYSIS                                  #
 #                                                                             #
 ###############################################################################
+
+# FINDING CRITICAL POINT (Maybe remove lower part)
+if AUTO:
+    critical_points = reg.find_critical(total_energy_wfn, cc, min_points=POINTS, use_inflex=INFLEX)
+else:
+    critical_points = turning_points
 
 # GET CT and PL TERMS:
 if CHARGE_TRANSFER_POLARISATION:
@@ -383,7 +389,7 @@ if IQF:
         iqf_val = iqa_intra[i]
         iqf_comp_np = np.array(iqf_intra_comps[i])
         reg_int = reg.reg(iqf_val,cc,iqf_comp_np,np=POINTS, critical=False, inflex=INFLEX,
-                        critical_index=[int(len(reg_intra[0][0])) - 1])
+                        critical_index=critical_points)
         iqf_intra_comp_list.append(reg_int)
 
 # CALCULATE TOTAL ENERGIES
