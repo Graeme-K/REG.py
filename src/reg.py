@@ -65,7 +65,10 @@ def regression(A, B, mode=None):
     sum_sqB = sum([b**2 for b in B])
     slope = (len(A)*sum_AB - sum_A_sum_B)/(len(A)*sum_sqA - sqsum_A) 
     intercept = (sum(B)*sum_sqA - sum(A)*sum_AB)/(len(A)*sum_sqA-sqsum_A)
-    pearson = (len(A)*sum_AB - sum(A)*sum(B))/((len(A)*sum_sqA-sum(A)**2)*(len(A)*sum_sqB-sum(B)**2))**(0.5)
+    try:
+        pearson = (len(A)*sum_AB - sum(A)*sum(B))/((len(A)*sum_sqA-sum(A)**2)*(len(A)*sum_sqB-sum(B)**2))**(0.5)
+    except ZeroDivisionError:
+        pearson = 0
     
     return slope, intercept, pearson
 
