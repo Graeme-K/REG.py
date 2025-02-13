@@ -2,4 +2,4 @@
 src/__pycache__/*
 *.png
 *.csv
-
+src/default_settings.py

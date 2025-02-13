@@ -13,8 +13,20 @@ NOTE: The automatic analysis works if this file is run with python3 inside a fol
 saved in numbered folders) """
 
 # IMPORT LIBRARIES
+from optparse import OptionParser
+usage = "usage: %prog [options] arg"
+parser = OptionParser(usage)
+parser.add_option("-d", "--directory", action='store', type='string', dest='reg_dir',
+                    help="PLEASE INSERT THE PATH OF REG.py folder installation")
+parser.add_option("-f", "--IQF", action='store', type='string', dest='IQF_TF',
+                    help="Select T or F based on if you want to run IQF or not")
+
+(option, args) = parser.parse_args()
+
+
 import sys
-sys.path.insert(1, '/mnt/iusers01/pp01/w06498gk/1Software/REG/src')  # PLEASE INSERT THE PATH OF REG.py folder installation
+sys.path.insert(1, option.reg_dir)  # PLEASE INSERT THE PATH OF REG.py folder installation using -d option
+
 import reg
 import aimall_utils as aim_u
 import numpy as np
@@ -26,6 +38,8 @@ import re
 import os
 import time
 
+import default_settings
+
 ### STARTING TIMER ###
 start_time = time.time()
 ##############################    VARIABLES    ##################################
@@ -33,56 +47,61 @@ start_time = time.time()
 SYS = 'REG'  # name of the system
 
 ### PES Critical points options ###
-POINTS = 2  # number of points for "find_critical" function
-AUTO = True  # Search for critical points
-turning_points = []  # manually put critical points in the PES if necessary
-# NOTE: If analysing only a single segment (i.e. the PES has no critical points) please put AUTO=False and tp=[]
+POINTS = default_settings.POINTS  # number of points for "find_critical" function
+AUTO = default_settings.AUTO  # Search for critical points
+turning_points = default_settings.turning_points  # manually put critical points in the PES if necessary
 
 # DEFINE THE DESIRED TERMS:
-intra_prop = ['E_IQA_Intra(A)']  # chose the AIMAll intra atomic properties to analyse
-intra_prop_names = ['Eintra']  # names of the properties shown in the output
-inter_prop = ['VC_IQA(A,B)', 'VX_IQA(A,B)', 'E_IQA_Inter(A,B)']  # chose the AIMAll inter atomic properties to analyse
-inter_prop_names = ['Vcl', 'Vxc', 'Einter']  # names of the properties shown in the output
+intra_prop = default_settings.intra_prop  # chose the AIMAll intra atomic properties to analyse
+intra_prop_names = default_settings.intra_prop_names  # names of the properties shown in the output
+inter_prop = default_settings.inter_prop  # chose the AIMAll inter atomic properties to analyse
+inter_prop_names = default_settings.inter_prop_names  # names of the properties shown in the output
 
-REVERSE = False  # Reverse the REG points
+REVERSE = default_settings.REVERSE  # Reverse the REG points
 
-INFLEX = False
+INFLEX = default_settings.INFLEX
 
 ### CONTROL COORDINATE OPTIONS ###
-CONTROL_COORDINATE_TYPE = ''  # 'Scan' or 'IRC'. If empty ('') then default will be used
-Scan_Atoms = [1, 6]  # list of the atoms used for PES Scan (i.e. ModRedundant option in Gaussian)
-IRC_output = ''  # insert the g16 output file path if using IRC as control coordinate
+CONTROL_COORDINATE_TYPE = default_settings.CONTROL_COORDINATE_TYPE  # 'Scan' or 'IRC'. If empty ('') then default will be used
+Scan_Atoms = default_settings.Scan_Atoms  # list of the atoms used for PES Scan (i.e. ModRedundant option in Gaussian)
+IRC_output = default_settings.IRC_output  # insert the g16 output file path if using IRC as control coordinate
 
-CHARGE_TRANSFER_POLARISATION = False  # Split the classical electrostatic term into polarisation and monopolar charge-transfer
+CHARGE_TRANSFER_POLARISATION = default_settings.CHARGE_TRANSFER_POLARISATION  # Split the classical electrostatic term into polarisation and monopolar charge-transfer
 
-DISPERSION = True  # Run DFT-D3 program to consider dispersion
-# NOTE: This only works if you have DFT-D3 program installed in the same machine https://www.chemie.uni-bonn.de/pctc/mulliken-center/software/dft-d3/
+DISPERSION = default_settings.DISPERSION  # Run DFT-D3 program to consider dispersion
+
 ### DISPERSION OPTIONS ###
-DFT_D3_PATH = '/mnt/iusers01/pp01/w06498gk/1Software/DFT-D3/dftd3'  # insert path of DFT-D3 program
-DISP_FUNCTIONAL = 'B3-LYP'  # insert the functional used for D3 correction
-BJ_DAMPING = True  # Becke-Johnson Damping
+DFT_D3_PATH = default_settings.DFT_D3_PATH  # insert path of DFT-D3 program
+DISP_FUNCTIONAL = default_settings.DISP_FUNCTIONAL  # insert the functional used for D3 correction
+BJ_DAMPING = default_settings.BJ_DAMPING  # Becke-Johnson Damping
 
-WRITE = True  # write csv files for energy values and REG analysis
-SAVE_FIG = True  # save figures
-ANNOTATE = True  # annotate figures
-DETAILED_ANALYSIS = False
-LABELS = True  # label figures
-n_terms = 4  # number of terms to rank in figures and tables
-
+WRITE = default_settings.WRITE  # write csv files for energy values and REG analysis
+SAVE_FIG = default_settings.SAVE_FIG  # save figures
+ANNOTATE = default_settings.ANNOTATE  # annotate figures
+DETAILED_ANALYSIS = default_settings.DETAILED_ANALYSIS
+LABELS = default_settings.LABELS  # label figures
+n_terms = default_settings.n_terms  # number of terms to rank in figures and tables
 
 ###### REG-IQF
-IQF = True
+print(option.IQF_TF)
+if option.IQF_TF == 'T':
+    IQF = True
+else:
+    IQF = False
 if IQF:
     SYS = 'REG_IQF' 
-    with open('auto_reg.config') as f:
-        config_file = f.read()
-        Frag_names = re.findall(r'FRAG\s*ID\s*\d+\s*<(.*?)>',config_file) # Names of fragments
-        Frag_lists = re.findall(r'FRAG\s*ATOMS\s*\[([\d,]+)\]',config_file) # Atoms by number for fragments
-        List_of_frags = []
-        for f_list_str in Frag_lists:
-            atom_list = f_list_str.split(",")
-            int_atom_list = [int(a) for a in atom_list]
-            List_of_frags.append(int_atom_list)
+    if os.path.exists('auto_reg.config'):
+        with open('auto_reg.config') as f:
+            config_file = f.read()
+            Frag_names = re.findall(r'FRAG\s*ID\s*\d+\s*<(.*?)>',config_file) # Names of fragments
+            Frag_lists = re.findall(r'FRAG\s*ATOMS\s*\[([\d,]+)\]',config_file) # Atoms by number for fragments
+            List_of_frags = []
+            for f_list_str in Frag_lists:
+                atom_list = f_list_str.split(",")
+                int_atom_list = [int(a) for a in atom_list]
+                List_of_frags.append(int_atom_list)
+    else:
+        raise FileNotFoundError(f"Error: auto_reg.config file is missing from directory")
 
 #List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
 #Frag_names = ["C(pi)","H(pi)","F-"]
@@ -544,8 +563,8 @@ if WRITE:
 
     writer.save()
     energy_writer.save()
-    rv.plot_violin([dataframe_list[i]['R'] for i in range(len(reg_inter[0]))], save=SAVE_FIG,
-                   file_name='violin.png')  # Violing plot of R vs Segments
+    #rv.plot_violin([dataframe_list[i]['R'] for i in range(len(reg_inter[0]))], save=SAVE_FIG,
+                   #file_name='violin.png')  # Violing plot of R vs Segments
 
 ###############################################################################
 #                                                                             #
