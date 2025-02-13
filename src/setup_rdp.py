@@ -15,36 +15,151 @@ import numpy as np
 import matplotlib.pyplot as plt
 from optparse import OptionParser
 import csv
+import os
+import re
+import pandas as pd
 
-
-def get_energies_from_file(file, file_type, r_coord=False):
-    '''
-    Function to parse .txt files containing energies at each step of a PES
-
-    Open CSV
-    '''
-    energies = []
+def get_xyz_coords(file_loc):
+    scan_pattern = r'(\s*\!\s+[A-Za-z]+\s+[A-Z]+[(\[][0-9\,]+[)\]])\s+([0-9.]+)\s+Scan\s+!'
     cc = []
-    if file_type == "txt" and r_coord == False:
-        with open(file, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                energies.append(float(line.replace('\n' ,'')))
-    elif file_type == "grep" and r_coord == False:
-        with open(file, 'r') as f:
-            for line in f.readlines():
-                energies.append(float(line.split(' ')[-1]))
-    elif file_type == "csv" and r_coord:
-        with open(file,'r') as f:
-            f_csv = csv.reader(f)
-            for row in f_csv:
-                energies.append(float(row[1]))
-                cc.append(float(row[0]))
+    converged_step = False
+    coord_pattern = r'\s+\d+\s+(\d+)\s+\d\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+'
+    xyz_coordinates = []
+    list_of_xyz_coordinates = []
+    stop_index = 0
+    opt=False
+    energy_pattern = r' SCF Done:  E[(\[]([A-Za-z \d]+)[)\]]\s*=\s*(-?\d+.\d+)'
+    energy = []
+    theory_level = []
 
-    if r_coord == False:
-        cc = np.array([i for i in range(1, len(energies) + 1)])
+    with open(file_loc,'r') as file:
+        lines = file.readlines()
+        for i,line in enumerate(lines):
+            matched = re.search(scan_pattern,line)
+            cc_opt = re.search(r'GICDEF:\s*([A-Za-z][(\[][0-9\,]+[)\]]+)',line)
+            if matched:
+                scan_match = r'{}\s+([0-9.]+)\s*-DE/DX =\s*'.format(matched.group(1).replace('(','\(').replace(')','\)'))
+                stop_index = i
+                break
+            elif cc_opt:
+                scan_match = r'{}\s+([0-9.]+)'.format(cc_opt.group(1).replace('(','\(').replace(')','\)'))
+                stop_index = i
+                opt = True
+                break  
 
-    return energies, cc
+        for line in reversed(lines[stop_index+10:]):
+            cc_matched = re.search(scan_match,line)
+            energy_matched = re.search(energy_pattern,line)
+            if cc_matched:
+                cc.append(cc_matched.group(1))
+                converged_step = True
+            elif converged_step and re.match(coord_pattern,line):
+                xyz_coordinates.append(re.sub(coord_pattern, r'\1   \2  \3  \4 \n',line))
+            elif converged_step and energy_matched:
+                theory_level.append(energy_matched.group(1))
+                energy.append(energy_matched.group(2))
+            elif converged_step and re.search(r' Number     Number       Type             X           Y           Z',line):
+                list_of_xyz_coordinates.append(xyz_coordinates)
+                xyz_coordinates = []
+                converged_step = False
+                if opt:
+                    break
+
+    return cc,energy,theory_level,list_of_xyz_coordinates
+
+'''
+Method for looking for and loading all .out or .log files in all sub folders. 'Hey im walking here'
+'''
+def find_outputs():
+    out_files = []
+    for root,_,files in os.walk("."):
+        for name in files:           
+            if name.endswith(".out") or name.endswith(".log"):
+                out_files.append(os.path.join(root,name))
+
+    return out_files
+
+'''
+Method for creating dataframe of data from output files
+'''
+def data_compile(cc_list,energy_list,theory_level_list,xyz_list):
+    data = {}
+    ccs = []
+    energies = []
+    theory_levels = []
+    xyzs = []
+
+    for i,cc in enumerate(cc_list):
+        ccs.append(cc)
+        energies.append(energy_list[i])
+        theory_levels.append(theory_level_list[i])
+        xyzs.append(xyz_list[i])
+
+    data['Control coord'] = ccs
+    data['energy'] = np.array(energies,dtype=float)
+    data['Level of theory'] = theory_levels
+    data['XYZ_Coords'] = xyzs
+
+    data_df = pd.DataFrame(data).drop_duplicates(subset='Control coord').sort_values('Control coord')
+    data_df['energy'] = data_df["energy"].transform(lambda x: (x - min(data['energy'])) * 2625.5) #Converting to kJmol
+
+    return data_df
+
+'''
+Method to write an XYZ file for each control coordinate.
+'''
+def write_XYZ_methods(data_frame,out_dir):
+    #Creating directory
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    for index, row in data_frame.iterrows():
+        output = ''
+        output += str(len(row['XYZ_Coords'])) + '\n'
+        output += 'Step: {}  E({}): {} \n'.format(row['Control coord'], row['Level of theory'], row['energy'])
+        for coord in reversed(row['XYZ_Coords']):
+            output += coord
+        new_file = open('{}/step_{}.xyz'.format(out_dir,str(row['Control coord'])),'w')
+        new_file.write(output)
+        new_file.close()
+
+
+def scan_files_and_combile_data():
+    full_cc = []
+    full_energy = []
+    full_theory_level = []
+    full_coords = []
+
+    files = find_outputs()
+
+    for file in files:
+        cc, energy, theory_level, list_of_xyz_coordinates = get_xyz_coords(file)
+        full_cc = full_cc + cc
+        full_energy = full_energy + energy
+        full_theory_level = full_theory_level + theory_level
+        full_coords = full_coords + list_of_xyz_coordinates
+
+    data_frame = data_compile(full_cc,full_energy, full_theory_level, full_coords)
+    return data_frame
+
+
+def re_fit_rdp(X,Y):
+    X, Y = (list(t) for t in zip(*sorted(zip(X, Y))))
+    max_Y = max(Y)
+    min_Y = min(Y)
+    delta_Y_av = (max_Y - min_Y)/(len(Y)-1)
+    delta_X_av = (max(X)-min(X)) / (len(X)-1)
+    delta_X_scale = delta_Y_av / delta_X_av
+    
+    new_X = {min_Y : X[0]}
+
+    for i in range(len(X)-1):
+        delta_X = X[i+1] - X[i]
+        new_delta_X = delta_X * delta_X_scale
+        new_X_val = list(new_X.keys())[i] + new_delta_X
+        new_X[new_X_val] = X[i+1]
+
+    return list(new_X.keys()),Y,new_X
 
 
 def find_point_between_two_points(start, end, value):
@@ -163,7 +278,7 @@ def minimum_points_segment_RDP(energy, cc, epsilon):
     return y, x, RMSE
 
 
-def cross_validation_RDP(energy, cc, rmse_confidence=0.01, step_size=0.01):
+def cross_validation_RDP(energy, cc, epsilon = 0.5, step_size=0.01):
     '''
     Function to run the RDP algorithm X times (depending on step_size) at different values of epsilon and obtain
     obtain a function with lowest number of points at that (or below) RMSE of confidence.
@@ -172,16 +287,14 @@ def cross_validation_RDP(energy, cc, rmse_confidence=0.01, step_size=0.01):
     #cc = [cor* for cor in cc]
     [new_vector.append((cc[i], energy[i])) for i in range(0, len(energy))]
     max_epsilon = find_maximum_deviation(np.array(new_vector), pdist=deviation)
-    epsilon = np.arange(0, max_epsilon, step_size).tolist()
     y_values_minimum = []
     x_values_minimum = []
     rmse_min = []
-    for eps in epsilon:
-        y_values, x_values, rmse = minimum_points_segment_RDP(energy, cc, eps)
-        if rmse <= rmse_confidence:
-            y_values_minimum.append(y_values)
-            x_values_minimum.append(x_values)
-            rmse_min.append(rmse)
+    y_values, x_values, rmse = minimum_points_segment_RDP(energy, cc, epsilon)
+    if True:
+        y_values_minimum.append(y_values)
+        x_values_minimum.append(x_values)
+        rmse_min.append(rmse)
 
     return min(x_values_minimum, key=len), min(y_values_minimum, key=len), rmse_min[
         x_values_minimum.index(min(x_values_minimum, key=len))]
@@ -189,6 +302,7 @@ def cross_validation_RDP(energy, cc, rmse_confidence=0.01, step_size=0.01):
 
 def main():
     #Parsing USER INPUT
+    '''
     global segments, cc_new
     usage = "usage: %prog [options] arg"
     parser = OptionParser(usage)
@@ -198,44 +312,71 @@ def main():
     parser.add_option("-c", "--critical_points", action='store', type='string', dest='critical_points',
                       help="'AUTO' for automatic search / List of integer values (e.g. cp1,cp2,..cpn) for user "
                            "defined points / Nothing for single segment PES")
-    (option, args) = parser.parse_args()
+    (option, args) = parser.parse_args()'''
 
-    print(
-        "RDP setup: searching for a new polyline with RMSE of confidence {} kJ/mol ...".format(option.rmse_confidence))
-    wfn_energies,cc = get_energies_from_file('C:\\Users\\w06498gk\\GitHub\\REG.py\\src\\PES3.csv', file_type='csv',r_coord=True)
-    wfn_energies = np.array(wfn_energies) #* 2625.5 #Converting in kJ/mol from a.u.
+    #print(
+    #    "RDP setup: searching for a new polyline with RMSE of confidence {} kJ/mol ...".format(option.rmse_confidence))
+    
+    scan_df = scan_files_and_combile_data()
+
+
+    wfn_energies = np.array(scan_df['energy'],dtype=float)
+    cc = np.array(scan_df['Control coord'],dtype=float)
+
+    cc,wfn_energies, x_dict = re_fit_rdp(cc, wfn_energies) # Scaling the coordinates so the RDP works well
+
+    og_cc = list(x_dict.values())
 
     # Search for critical points in the function
     if TRUE:
-        tp = reg.find_critical(wfn_energies, cc, use_inflex=False, min_points=5)
-        segments = reg.split_segm(wfn_energies - sum(wfn_energies) / len(wfn_energies), tp)
+        tp = reg.find_critical(wfn_energies, cc, use_inflex=False, min_points=3)
+        segments = reg.split_segm(wfn_energies, tp)
         cc_new = reg.split_segm(cc, tp)
+        '''
     elif isinstance(option.critical_points, str):
         tp = [(int(value)) for value in option.critical_points.split(',')]
         segments = reg.split_segm(wfn_energies - sum(wfn_energies) / len(wfn_energies), tp)
         cc_new = reg.split_segm(cc, tp)
     elif not option.critical_points:
         segments = [wfn_energies - sum(wfn_energies) / len(wfn_energies)]
-        cc_new = [cc]
+        cc_new = [cc]'''
 
+    all_selected_points = []
     #Creating a figure with the new polyline given the USER input rmse of confidence
     plt.rcParams.update({'font.size': 12})
     fig = plt.figure(figsize=( 9,5))
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-    for i in range(0, len(segments)):
-        x, y, RMSE = cross_validation_RDP(segments[i], cc_new[i], rmse_confidence=0.3)
+
+    for i,segment in enumerate(segments):
+        if len(segment) > 2:
+            x, y, RMSE = cross_validation_RDP(segment, cc_new[i], epsilon = 0.2)
+            x = [x_dict[i] for i in x]
+        else:
+            x = cc_new[i]
+            x = [x_dict[i] for i in x]
+            y = segment
+            RMSE = 0.0
         print("RMSE Segment {} = {}".format(i + 1, RMSE))
         print("Points of the new polyline for Segment {} = {}".format(i + 1, x))
         plt.plot(x, y, marker='o', markersize=10)
         plt.plot(x[0], y[0], marker='o', markersize=10, c='red')
         plt.plot(x[-1], y[-1], marker='o', markersize=10, c='red')
-        textstr = 'RMSE = {}'.format(round(RMSE, 2))
-        plt.text(sum(x) / len(x), sum(y) / len(y), textstr, fontsize=12, verticalalignment='top', bbox=props)
-    plt.plot(cc, wfn_energies - sum(wfn_energies) / len(wfn_energies), c='#4d4d4d', marker='o', markersize=2)
+
+        all_selected_points += y
+
+
+    plt.plot(og_cc, wfn_energies, c='#4d4d4d', marker='o', markersize=2)
     plt.xlabel(r'Control Coordinate (Å)')
     plt.ylabel(r'Relative Energy (kJ $\mathrm{mol^{-1}}$)')
-    plt.show()
     fig.savefig('RDP_out.png', dpi=300, bbox_inches='tight')
+
+    # Removing RDP geomerties for saving
+    select_rdp_df = scan_df[scan_df['energy'].isin(all_selected_points)]
+    removed_rdp_df = scan_df[~scan_df['energy'].isin(all_selected_points)]
+    scan_df['RDP_select'] = scan_df['energy'].isin(all_selected_points)
+    scan_df[['Control coord', 'energy','RDP_select']].to_csv('PES_Scan.csv')
+    write_XYZ_methods(select_rdp_df,'Selected_Points')
+    write_XYZ_methods(removed_rdp_df,'Removed_Points')
 
 if __name__ == "__main__":
     main()
