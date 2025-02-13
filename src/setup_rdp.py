@@ -302,20 +302,20 @@ def cross_validation_RDP(energy, cc, epsilon = 0.5, step_size=0.01):
 
 def main():
     #Parsing USER INPUT
-    '''
     global segments, cc_new
     usage = "usage: %prog [options] arg"
     parser = OptionParser(usage)
-    parser.add_option("-f", "--file", action='store', type='string', dest='file', help="input file with PES energies")
-    parser.add_option("-r", "--rmse", action='store', type='float', dest='rmse_confidence',
+    parser.add_option("-r", "--epsilon", action='store', type='float', dest='epsilon_val',
                       help="Root Mean Squared error of confidence")
-    parser.add_option("-c", "--critical_points", action='store', type='string', dest='critical_points',
-                      help="'AUTO' for automatic search / List of integer values (e.g. cp1,cp2,..cpn) for user "
-                           "defined points / Nothing for single segment PES")
-    (option, args) = parser.parse_args()'''
+    
+    try:
+        (option, args) = parser.parse_args()
+        eps_val = option.repsilon_val
+    except:
+        eps_val = 0.3
 
-    #print(
-    #    "RDP setup: searching for a new polyline with RMSE of confidence {} kJ/mol ...".format(option.rmse_confidence))
+    print(
+        "RDP setup: searching for a new polyline with epsilon of {} ...".format(eps_val))
     
     scan_df = scan_files_and_combile_data()
 
@@ -349,7 +349,7 @@ def main():
 
     for i,segment in enumerate(segments):
         if len(segment) > 2:
-            x, y, RMSE = cross_validation_RDP(segment, cc_new[i], epsilon = 0.2)
+            x, y, RMSE = cross_validation_RDP(segment, cc_new[i], epsilon = eps_val)
             x = [x_dict[i] for i in x]
         else:
             x = cc_new[i]
