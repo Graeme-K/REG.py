@@ -13,6 +13,7 @@ from pickle import TRUE
 import reg
 import numpy as np
 import matplotlib.pyplot as plt
+plt.switch_backend('agg')
 from optparse import OptionParser
 import csv
 import os
