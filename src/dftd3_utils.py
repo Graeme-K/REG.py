@@ -83,7 +83,7 @@ ERROR:
     return disp_properties, contributions_list
 
 
-def run_DFT_D3(program_path, xyz_file, functional, BJ_Damping=True):
+#def run_DFT_D3(program_path, xyz_file, functional, BJ_Damping=True):
     '''
 ###########################################################################################################
 FUNCTION: run_DFT_D3
@@ -131,7 +131,10 @@ Note (06/12/2020): AIMAll works with LSDA, B3LYP, PBE, PBE0, M062X
 
     else:
         functional_list = ['B3-LYP','M062X','PBE', 'PBE0']
+        d2_functional_list = ['b97-d']
         if functional.upper() in functional_list:
             os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + ' -anal > {}/dft-d3.log'.format(reg_folder))
+        elif functional.lower() in d2_functional_list:
+            os.system(program_path + ' ' + xyz_file + ' -func ' + functional.lower() + '-old -anal > {}/dft-d3.log'.format(reg_folder))
         else:
             raise ValueError('Insert a functional that works with AIMAll')

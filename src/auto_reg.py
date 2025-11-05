@@ -371,7 +371,7 @@ if CHARGE_TRANSFER_POLARISATION:
 if DISPERSION:
     for i in range(0, len(reg_folders)):
         xyz_file = xyz_files[i]
-        disp_u.run_DFT_D3(DFT_D3_PATH, reg_root_list[i], xyz_file, DISP_FUNCTIONAL)
+        disp_u.run_DFT_D3(DFT_D3_PATH, reg_root_list[i], xyz_file, DISP_FUNCTIONAL,BJ_DAMPING)
     folders_disp = [reg_root_list[i] + '/dft-d3.log' for i in range(0, len(reg_folders))]
     # GET INTER-ATOMIC DISPERSION TERMS:
     iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
