@@ -178,7 +178,8 @@ elif CONTROL_COORDINATE_TYPE == 'IRC':
     cc = gauss_u.get_control_coordinates_IRC_g16(IRC_output)
     X_LABEL = r"Control Coordinate r[$\AA$]"
 else:
-    cc = [int(reg_folders[i]) for i in range(0, len(reg_folders))]
+    #cc = [int(reg_folders[i]) for i in range(0, len(reg_folders))]
+    cc = [float(re.search(r'\d+(?:\.\d+)?', reg_folders[i]).group()) for i in range(0, len(reg_folders)) ]
     X_LABEL = "Control Coordinate [REG step]"
 cc = np.array(cc)
 if REVERSE:
