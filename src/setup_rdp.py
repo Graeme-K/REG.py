@@ -311,7 +311,7 @@ def main():
     
     try:
         (option, args) = parser.parse_args()
-        eps_val = option.repsilon_val
+        eps_val = option.epsilon_val
     except:
         eps_val = 0.3
 
