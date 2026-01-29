@@ -10,27 +10,42 @@ Please, report bugs and issues to fabio.falcioni@manchester.ac.uk
 coded by F.Falcioni
 """
 from pickle import TRUE
-import reg
+import reg # type: ignore
 import numpy as np
-plt.switch_backend('agg')
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # type: ignore
 plt.switch_backend('agg')
 from optparse import OptionParser
 import csv
 import os
 import re
-import pandas as pd
+import pandas as pd # type: ignore
 
-def get_xyz_coords(file_loc):
-    scan_pattern = r'(\s*\!\s+[A-Za-z]+\s+[A-Z]+[(\[][0-9\,]+[)\]])\s+([0-9.]+)\s+Scan\s+!'
+def get_xyz_coords(file_loc, cc_label):
+    '''
+    Method to extract the coordinates, energy, and theory level from a gaussian output file.
+    If cc_label is provided, it will be used to extract the control coordinate for single point calculations.
+    '''
+    # Defining patterns and variables
+    stop_index = 0 # Index to stop reading the file
+    converged_step = False # Flag to identify moving to next step
+    opt=False # Flag to identify if the calculation is an optimization
+
+    # Patterns to extract data from gaussian output files
+    energy_pattern = r' SCF Done:  E[(\[]([A-Za-z \d]+)[)\]]\s*=\s*(-?\d+.\d+)' # Extracting energy and theory level
+    end_of_GIC_pattern = r'\s*Number of steps in this run=\s*(\d+)\s+maximum allowed number of steps=\s*(\d+)\.' # To identify the end of General Internal Coordinates section
+    coord_pattern = r'\s+\d+\s+(\d+)\s+\d\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+' # Extracting coordinates of each atom
+    scan_pattern = r'\s*\!\s+[A-Za-z]+\s+([A-Z]+[(\[][0-9\,]+[)\]])\s+([0-9.]+)\s+Scan\s+!' # Extracting scan coordinate label and value
+    start_of_xyz_coord_pattern = r'\s*Number\s+Number\s+Type\s+X\s+Y\s+Z\s*' # To identify the start of the XYZ coordinates section
+    start_of_opt_geom_section_pattern = r'\s*Optimization completed\.\s*' # To identify the start of the optimized geometry section
+
+
+    # Initial scan ID used to find cc for single point calculations
+    scan_ID = 'NA'
+
+    # Lists to store data
     cc = []
-    converged_step = False
-    coord_pattern = r'\s+\d+\s+(\d+)\s+\d\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+'
     xyz_coordinates = []
     list_of_xyz_coordinates = []
-    stop_index = 0
-    opt=False
-    energy_pattern = r' SCF Done:  E[(\[]([A-Za-z \d]+)[)\]]\s*=\s*(-?\d+.\d+)'
     energy = []
     theory_level = []
 
@@ -38,36 +53,42 @@ def get_xyz_coords(file_loc):
         lines = file.readlines()
         for i,line in enumerate(lines):
             matched = re.search(scan_pattern,line)
-            cc_opt = re.search(r'GICDEF:\s*([A-Za-z][(\[][0-9\,]+[)\]]+)',line)
             if matched:
                 scan_match = r'{}\s+([0-9.]+)\s*-DE/DX =\s*'.format(matched.group(1).replace('(','\(').replace(')','\)'))
+                scan_ID = matched.group(1)
                 stop_index = i
                 break
-            elif cc_opt:
-                scan_match = r'{}\s+([0-9.]+)'.format(cc_opt.group(1).replace('(','\(').replace(')','\)'))
+            elif re.search(end_of_GIC_pattern,line):
                 stop_index = i
                 opt = True
                 break  
 
         for line in reversed(lines[stop_index+10:]):
-            cc_matched = re.search(scan_match,line)
             energy_matched = re.search(energy_pattern,line)
-            if cc_matched:
-                cc.append(cc_matched.group(1))
+            if (opt and re.match(start_of_opt_geom_section_pattern,line)):
+                cc.append(0.0)  # For missing values set control coordinate to 0.0
+                converged_step = True
+            elif (not opt) and (re.search(scan_match,line)):
+                # Found a new step and extracting control coordinate
+                cc.append(re.search(scan_match,line).group(1))
                 converged_step = True
             elif converged_step and re.match(coord_pattern,line):
+                # Extracting XYZ coordinates for each atom
                 xyz_coordinates.append(re.sub(coord_pattern, r'\1   \2  \3  \4 \n',line))
             elif converged_step and energy_matched:
+                # Extracting theory level and energy for each step
                 theory_level.append(energy_matched.group(1))
                 energy.append(energy_matched.group(2))
-            elif converged_step and re.search(r' Number     Number       Type             X           Y           Z',line):
+            elif converged_step and re.search(start_of_xyz_coord_pattern,line):
+                # End of coordinates for the step reached, saving data and resetting variables
                 list_of_xyz_coordinates.append(xyz_coordinates)
                 xyz_coordinates = []
                 converged_step = False
                 if opt:
                     break
 
-    return cc,energy,theory_level,list_of_xyz_coordinates
+    return scan_ID,cc,energy,theory_level,list_of_xyz_coordinates
+
 
 '''
 Method for looking for and loading all .out or .log files in all sub folders. 'Hey im walking here'
@@ -84,7 +105,7 @@ def find_outputs():
 '''
 Method for creating dataframe of data from output files
 '''
-def data_compile(cc_list,energy_list,theory_level_list,xyz_list):
+def data_compile(cc_list,energy_list,theory_level_list,xyz_list,cc_label):
     data = {}
     ccs = []
     energies = []
@@ -92,7 +113,7 @@ def data_compile(cc_list,energy_list,theory_level_list,xyz_list):
     xyzs = []
 
     for i,cc in enumerate(cc_list):
-        ccs.append(cc)
+        ccs.append(float(cc))
         energies.append(energy_list[i])
         theory_levels.append(theory_level_list[i])
         xyzs.append(xyz_list[i])
@@ -102,10 +123,86 @@ def data_compile(cc_list,energy_list,theory_level_list,xyz_list):
     data['Level of theory'] = theory_levels
     data['XYZ_Coords'] = xyzs
 
-    data_df = pd.DataFrame(data).drop_duplicates(subset='Control coord').sort_values('Control coord')
-    data_df['energy'] = data_df["energy"].transform(lambda x: (x - min(data['energy'])) * 2625.5) #Converting to kJmol
+    # Creating datafraeme from data dictionary
+    data_df = pd.DataFrame(data)
 
+    # Calculate CC values for any rows where Control coord is NA
+    mask = data_df['Control coord'] == 0.0
+    data_df.loc[mask, 'Control coord'] = data_df.loc[mask].apply(
+        lambda row: calculate_cc(row['XYZ_Coords'], cc_label), axis=1
+    )
+
+    data_df = data_df.drop_duplicates(subset='Control coord').sort_values('Control coord')
+    data_df['energy'] = data_df["energy"].transform(lambda x: (x - min(data_df['energy'])) * 2625.5) #Converting to kJmol
+
+    ### Performing checks on the dataframe
+    # Check all steps have same number of atoms
+    no_atoms = data_df['XYZ_Coords'].apply(len)
+    no_atoms_match = no_atoms.nunique() == 1
+
+    # Check all theory levels are the same
+    theory_level_match = data_df['Level of theory'].nunique() == 1
+
+    # Raise warning if checks fail
+    if not no_atoms_match:
+        raise ValueError("Error: Not all steps have the same number of atoms. Please check your output files.")
+    if not theory_level_match:
+        raise ValueError("Error: Not all steps have the same level of theory. Please check your output files.")
+    
     return data_df
+
+def calculate_cc(xyz_coords, cc_label):
+    '''
+    Method to calculate the control coordinate for a given set of XYZ coordinates and control coordinate label.
+    '''
+    coord_pattern =  r'([A-Z]+)\(([0-9,]+)\)' # Extracting scan coordinate label and value
+    matched = re.search(coord_pattern, cc_label)
+    if not matched:
+        raise ValueError("Error: Control coordinate label is not in the correct format. Please check your PES scan output files.")
+    
+    coord_type = matched.group(1)
+    atom_indices = [int(i) - 1 for i in matched.group(2).split(',')]
+
+    reordered_xyz_coords = list(reversed(xyz_coords))
+
+    if coord_type == 'R':
+        atom1 = np.array([float(reordered_xyz_coords[atom_indices[0]].split()[j]) for j in range(1,4)])
+        atom2 = np.array([float(reordered_xyz_coords[atom_indices[1]].split()[j]) for j in range(1,4)])
+        distance = np.linalg.norm(atom1 - atom2)
+        return distance
+    elif coord_type == 'A':
+        atom1 = np.array([float(reordered_xyz_coords[atom_indices[0]].split()[j]) for j in range(1,4)])
+        atom2 = np.array([float(reordered_xyz_coords[atom_indices[1]].split()[j]) for j in range(1,4)])
+        atom3 = np.array([float(reordered_xyz_coords[atom_indices[2]].split()[j]) for j in range(1,4)])
+
+        vec1 = atom1 - atom2
+        vec2 = atom3 - atom2
+        
+        cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        angle = np.arccos(cos_angle) * (180.0 / np.pi)
+        return angle
+    elif coord_type == 'D':
+        atom1 = np.array([float(reordered_xyz_coords[atom_indices[0]].split()[j]) for j in range(1,4)])
+        atom2 = np.array([float(reordered_xyz_coords[atom_indices[1]].split()[j]) for j in range(1,4)])
+        atom3 = np.array([float(reordered_xyz_coords[atom_indices[2]].split()[j]) for j in range(1,4)])
+        atom4 = np.array([float(reordered_xyz_coords[atom_indices[3]].split()[j]) for j in range(1,4)])
+        
+        b1 = atom2 - atom1
+        b2 = atom3 - atom2
+        b3 = atom4 - atom3
+        
+        n1 = np.cross(b1, b2)
+        n2 = np.cross(b2, b3)
+        
+        m1 = np.cross(n1, b2 / np.linalg.norm(b2))
+        
+        x = np.dot(n1, n2)
+        y = np.dot(m1, n2)
+        
+        angle = np.arctan2(y, x) * (180.0 / np.pi)
+        return angle
+    else:
+        raise ValueError("Error: Control coordinate type '{}' is not supported. Please check your output files.".format(coord_type))
 
 '''
 Method to write an XYZ file for each control coordinate.
@@ -121,11 +218,13 @@ def write_XYZ_methods(data_frame,out_dir):
         output += 'Step: {}  E({}): {} \n'.format(row['Control coord'], row['Level of theory'], row['energy'])
         for coord in reversed(row['XYZ_Coords']):
             output += coord
-        new_file = open('{}/step_{}.xyz'.format(out_dir,str(row['Control coord'])),'w')
+        new_file = open('{}/step_{:.5g}.xyz'.format(out_dir,row['Control coord']),'w')
         new_file.write(output)
         new_file.close()
 
-
+'''
+Method to scan through gaussian output files and combine data into a single dataframe.
+'''
 def scan_files_and_combile_data():
     full_cc = []
     full_energy = []
@@ -134,14 +233,28 @@ def scan_files_and_combile_data():
 
     files = find_outputs()
 
+    cc_label = 'NA'
+
     for file in files:
-        cc, energy, theory_level, list_of_xyz_coordinates = get_xyz_coords(file)
+        # Extracting data from each output file and using cc_label for single point calculations
+        scan_ID, cc, energy, theory_level, list_of_xyz_coordinates = get_xyz_coords(file, cc_label)
+        # Checking that all scans have the same scan coordinates and saving them for single point calculations
+        if (cc_label == 'NA') and (scan_ID != 'NA'):
+            cc_label = scan_ID
+        elif (cc_label != scan_ID) and (scan_ID != 'NA'):
+            raise ValueError("Error: Different scan coordinates found in the output files. Please check your output files.")
+        
+        # Combining data from all files
         full_cc = full_cc + cc
         full_energy = full_energy + energy
         full_theory_level = full_theory_level + theory_level
         full_coords = full_coords + list_of_xyz_coordinates
+    # Creating dataframe from combined data
+    data_frame = data_compile(full_cc,full_energy, full_theory_level, full_coords, cc_label)
 
-    data_frame = data_compile(full_cc,full_energy, full_theory_level, full_coords)
+    # Write dataframe to CSV
+    data_frame.to_csv('PES_Scan_Raw.csv', index=False)
+
     return data_frame
 
 
