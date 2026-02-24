@@ -33,8 +33,8 @@ def get_xyz_coords(file_loc, cc_label):
     # Patterns to extract data from gaussian output files
     energy_pattern = r' SCF Done:  E[(\[]([A-Za-z \d]+)[)\]]\s*=\s*(-?\d+.\d+)' # Extracting energy and theory level
     end_of_GIC_pattern = r'\s*Number of steps in this run=\s*(\d+)\s+maximum allowed number of steps=\s*(\d+)\.' # To identify the end of General Internal Coordinates section
-    coord_pattern = r'\s+\d+\s+(\d+)\s+\d\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+(-?\d+.\d+)\s+' # Extracting coordinates of each atom
-    scan_pattern = r'\s*\!\s+[A-Za-z]+\s+([A-Z]+[(\[][0-9\,]+[)\]])\s+([0-9.]+)\s+Scan\s+!' # Extracting scan coordinate label and value
+    coord_pattern = r'\s+\d+\s+(\d+)\s+\d\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+' # Extracting coordinates of each atom
+    scan_pattern = r'\s*\!\s+[A-Za-z]+\s+([A-Z]+[(\[][0-9\,]+[)\]])\s+(-?[0-9.]+)\s+Scan\s+!' # Extracting scan coordinate label and value
     start_of_xyz_coord_pattern = r'\s*Number\s+Number\s+Type\s+X\s+Y\s+Z\s*' # To identify the start of the XYZ coordinates section
     start_of_opt_geom_section_pattern = r'\s*Optimization completed\.\s*' # To identify the start of the optimized geometry section
 
@@ -54,7 +54,7 @@ def get_xyz_coords(file_loc, cc_label):
         for i,line in enumerate(lines):
             matched = re.search(scan_pattern,line)
             if matched:
-                scan_match = r'{}\s+([0-9.]+)\s*-DE/DX =\s*'.format(matched.group(1).replace('(','\(').replace(')','\)'))
+                scan_match = r'{}\s+(-?[0-9.]+)\s*-DE/DX =\s*'.format(matched.group(1).replace('(', r'\(').replace(')', r'\)'))
                 scan_ID = matched.group(1)
                 stop_index = i
                 break
@@ -255,7 +255,7 @@ def scan_files_and_combile_data():
     # Write dataframe to CSV
     data_frame.to_csv('PES_Scan_Raw.csv', index=False)
 
-    return data_frame
+    return data_frame, cc_label
 
 
 def re_fit_rdp(X,Y):
@@ -432,7 +432,7 @@ def main():
     print(
         "RDP setup: searching for a new polyline with epsilon of {} ...".format(eps_val))
     
-    scan_df = scan_files_and_combile_data()
+    scan_df, cc_label = scan_files_and_combile_data()
 
 
     wfn_energies = np.array(scan_df['energy'],dtype=float)
@@ -481,7 +481,8 @@ def main():
 
 
     plt.plot(og_cc, wfn_energies, c='#4d4d4d', marker='o', markersize=2)
-    plt.xlabel(r'Control Coordinate (Å)')
+    cc_unit = r'($^\circ$)' if cc_label.startswith(('A', 'D')) else r'(Å)'
+    plt.xlabel(r'Control Coordinate ' + cc_unit)
     plt.ylabel(r'Relative Energy (kJ $\mathrm{mol^{-1}}$)')
     fig.savefig('RDP_out.png', dpi=300, bbox_inches='tight')
 

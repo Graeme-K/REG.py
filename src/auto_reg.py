@@ -28,17 +28,17 @@ import sys
 sys.path.insert(1, option.reg_dir)  # PLEASE INSERT THE PATH OF REG.py folder installation using -d option
 
 import reg
-import aimall_utils as aim_u
+import aimall_utils as aim_u # type: ignore
 import numpy as np
-import pandas as pd
-import reg_vis as rv
-import gaussian_utils as gauss_u
-import dftd3_utils as disp_u
+import pandas as pd # type: ignore
+import reg_vis as rv # type: ignore
+import gaussian_utils as gauss_u # type: ignore
+import dftd3_utils as disp_u # type: ignore
 import re
 import os
 import time
 
-import default_settings
+import default_settings # type: ignore
 
 ### STARTING TIMER ###
 start_time = time.time()
