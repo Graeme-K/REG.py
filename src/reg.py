@@ -74,7 +74,7 @@ def regression(A, B, mode=None):
 
 
 
-def find_critical(Y,X, min_points=3, use_inflex=False):
+def find_critical(Y,X, min_points=1, use_inflex=False):
     """
     ###########################################################################################################
     FUNCTION: find_critical

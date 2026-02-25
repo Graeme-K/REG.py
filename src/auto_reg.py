@@ -137,7 +137,7 @@ for root,_,files in os.walk("."):
             reg_folder_list.append(root)
             WFX = True
             
-        elif name.endswith(".out"):
+        elif name.endswith(".out") or name.endswith(".log") or name.endswith(".gaussianoutput"):
             gau16_file.append(os.path.join(root,name))
 
 # Sorting all folders based on REG folders
@@ -181,6 +181,7 @@ else:
     #cc = [int(reg_folders[i]) for i in range(0, len(reg_folders))]
     cc = [float(re.search(r'\d+(?:\.\d+)?', reg_folders[i]).group()) for i in range(0, len(reg_folders)) ]
     X_LABEL = "Control Coordinate [REG step]"
+    print(cc)
 cc = np.array(cc)
 if REVERSE:
     cc = -cc
@@ -562,8 +563,8 @@ if WRITE:
     df_final_sorted.to_excel(writer, sheet_name='REG_final')
     rv.pandas_REG_dataframe_to_table(df_final_sorted, 'REG_final_table', SAVE_FIG=SAVE_FIG)
 
-    writer.save()
-    energy_writer.save()
+    writer.close()
+    energy_writer.close()
     #rv.plot_violin([dataframe_list[i]['R'] for i in range(len(reg_inter[0]))], save=SAVE_FIG,
                    #file_name='violin.png')  # Violing plot of R vs Segments
 
