@@ -40,8 +40,6 @@ import time
 
 import default_settings # type: ignore
 
-
-
 def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True,inter_terms=[],inter_prop=[],inp_iqf_intra=[],intra_terms=[],intra_prop=[]):
     """
     ###########################################################################################################
