@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.stats import norm # type: ignore
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
-from matplotlib.ticker import MultipleLocator  
+from matplotlib.ticker import MaxNLocator, AutoMinorLocator
 
 def set_axis_style(ax, labels):
     ax.get_xaxis().set_tick_params(direction='out')
@@ -127,8 +127,8 @@ def plot_segment(coordinate, wfn_energy, critical_points, label=False, color=Tru
             graph.annotate(str(i+1), [coordinate[i], wfn_energy[i]])
 
     
-    graph.xaxis.set_major_locator(MultipleLocator(2*abs(coordinate[0]-coordinate[1])))
-    graph.xaxis.set_minor_locator(MultipleLocator(abs(coordinate[0]-coordinate[1])))    
+    graph.xaxis.set_major_locator(MaxNLocator(nbins=10))
+    graph.xaxis.set_minor_locator(AutoMinorLocator())    
     graph.set_title(title, fontsize =16)  
     graph.set_xlim([graph.get_xlim()[0], graph.get_xlim()[1]])
     graph.set_ylabel(y_label, fontsize =14)
@@ -193,7 +193,7 @@ def create_term_dataframe(reg_dataframe, headers, i):
 
 def filter_term_dataframe(prop_dataframe, original_prop_name, new_prop_name):
     col = ['TERM', 'REG', 'R']
-    mask = prop_dataframe['TERM'].str.contains(original_prop_name)
+    mask = prop_dataframe['TERM'].str.contains(original_prop_name, regex=False)
     new_df = prop_dataframe.loc[mask, col].copy()
     new_df = new_df.sort_values('REG').reset_index(drop=True)
     new_df['TERM'] = new_df['TERM'].str.replace(original_prop_name + '-', new_prop_name + '(')

@@ -251,7 +251,7 @@ def main():
                 gau16_file.append(os.path.join(root,name))
 
     # Sorting all folders based on REG folders
-    all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub('\D', '', f[0])))
+    all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub(r'\D', '', f[0])))
 
     reg_folders,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
         
