@@ -51,7 +51,7 @@ def distance_A_B(xyz_file, atom_A, atom_B):
                 coord_atom_B[z] - coord_atom_A[z]) ** 2)
     return r_AB
 
-
+@profile
 def get_atom_list(wfn_file):
     """
     ###########################################################################################################
@@ -89,7 +89,7 @@ def get_atom_list(wfn_file):
 
     return atom_list
 
-
+@profile
 def get_atom_list_wfx(wfx_file):
     # INTERNAL VARIABLES:
     atom_list = []
@@ -110,7 +110,7 @@ def get_atom_list_wfx(wfx_file):
 
     return atom_list
 
-
+@profile
 def get_aimall_wfn_energies(A):
     """
     ###########################################################################################################
@@ -142,7 +142,7 @@ def get_aimall_wfn_energies(A):
 
     return wfn_energy
 
-
+@profile
 def get_aimall_wfx_energies(A):
     # INTERNAL VARIABLES:
     wfx_energy = []  # List of wfn files
@@ -160,7 +160,7 @@ def get_aimall_wfx_energies(A):
 
     return wfx_energy
 
-
+@profile
 def intra_property_from_int_file(folders, prop, atom_list):
     """
     ###########################################################################################################
@@ -238,7 +238,7 @@ def intra_property_from_int_file(folders, prop, atom_list):
 
     return intra_properties, contributions_list, missing_files
 
-
+@profile
 def inter_property_from_int_file(folders, prop, atom_list):
     """
     ###########################################################################################################
@@ -317,7 +317,7 @@ def inter_property_from_int_file(folders, prop, atom_list):
 
     return inter_properties, contributions_list, missing_files
 
-
+@profile
 def charge_transfer_and_polarisation_from_int_file(folders, atom_list, inter_properties, xyz_files):
     """
     ###########################################################################################################
