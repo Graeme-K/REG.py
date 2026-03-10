@@ -11,9 +11,9 @@ coded by F.Falcioni
 """
 from pickle import TRUE
 import reg # type: ignore
-import numpy as np
+import numpy as np # type: ignore
 import matplotlib.pyplot as plt # type: ignore
-plt.switch_backend('agg')
+# plt.switch_backend('agg') is set conditionally in main() so the GUI can use an interactive backend
 from optparse import OptionParser
 import csv
 import os
@@ -132,7 +132,20 @@ def data_compile(cc_list,energy_list,theory_level_list,xyz_list,cc_label):
         lambda row: calculate_cc(row['XYZ_Coords'], cc_label), axis=1
     )
 
-    data_df = data_df.drop_duplicates(subset='Control coord').sort_values('Control coord')
+    data_df = data_df.drop_duplicates(subset='Control coord').sort_values('Control coord').reset_index(drop=True)
+
+    # For CC values within 1° of each other (e.g. from different files), keep only the lowest energy point
+    keep = []
+    i = 0
+    while i < len(data_df):
+        group_cc = data_df.iloc[i]['Control coord']
+        j = i + 1
+        while j < len(data_df) and (data_df.iloc[j]['Control coord'] - group_cc) < 1.0:
+            j += 1
+        keep.append(data_df.iloc[i:j]['energy'].astype(float).idxmin())
+        i = j
+    data_df = data_df.loc[keep].reset_index(drop=True)
+
     data_df['energy'] = data_df["energy"].transform(lambda x: (x - min(data_df['energy'])) * 2625.5) #Converting to kJmol
 
     ### Performing checks on the dataframe
@@ -256,6 +269,30 @@ def scan_files_and_combile_data():
     data_frame.to_csv('PES_Scan_Raw.csv', index=False)
 
     return data_frame, cc_label
+
+
+def roll_to_critical_point(cc, energies):
+    """
+    For periodic dihedral angles, roll the data arrays so they start at the
+    first critical point, then unwrap the angles to be monotonically continuous.
+    This prevents a segment from being split across the -180/180 boundary.
+    """
+    cps = reg.find_critical(list(energies), list(cc), use_inflex=False, min_points=3)
+    if not cps:
+        return cc, energies
+
+    shift = cps[0]
+    cc = np.roll(cc, -shift)
+    energies = np.roll(energies, -shift)
+
+    # Unwrap: fix jumps larger than 180° between consecutive angle values
+    for i in range(1, len(cc)):
+        while cc[i] - cc[i - 1] > 180:
+            cc[i:] -= 360
+        while cc[i] - cc[i - 1] < -180:
+            cc[i:] += 360
+
+    return cc, energies
 
 
 def re_fit_rdp(X,Y):
@@ -415,6 +452,166 @@ def cross_validation_RDP(energy, cc, epsilon = 0.5, step_size=0.01):
         x_values_minimum.index(min(x_values_minimum, key=len))]
 
 
+def run_gui(scan_df, cc_label, cc, wfn_energies, og_cc, eps_val):
+    """
+    Interactive matplotlib GUI for reviewing RDP output.
+      Left-click a data point to toggle it:
+        green (+)  = force include,  red (x) = force exclude,  no marker = RDP default
+      Adjust Epsilon and click Re-run to recompute the polyline.
+      Click Save to write all output files.
+    """
+    import matplotlib.widgets as mwidgets
+
+    cc_list = list(cc)
+    energy_list = list(wfn_energies)
+    energy_to_idx = {e: j for j, e in enumerate(energy_list)}
+
+    current_eps = [float(eps_val)]
+    manual_add = set()      # energy values forced into selection
+    manual_remove = set()   # energy values forced out of selection
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    plt.subplots_adjust(bottom=0.22)
+    plt.rcParams.update({'font.size': 11})
+
+    seg_cache = [None]
+
+    def compute_segments(eps):
+        tp = reg.find_critical(energy_list, cc_list, use_inflex=False, min_points=3)
+        segs = reg.split_segm(energy_list, tp)
+        cc_segs = reg.split_segm(cc_list, tp)
+        results = []
+        for i, seg in enumerate(segs):
+            if len(seg) > 2:
+                _, y_sel, RMSE = cross_validation_RDP(seg, cc_segs[i], epsilon=eps)
+            else:
+                y_sel = list(seg)
+                RMSE = 0.0
+            results.append({
+                'rdp_y': set(y_sel),
+                'RMSE': RMSE,
+                'all_energies': set(seg),
+            })
+        return results
+
+    def redraw(eps):
+        ax.clear()
+        seg_results = compute_segments(eps)
+        seg_cache[0] = seg_results
+
+        ax.plot(og_cc, energy_list, c='#4d4d4d', marker='o', markersize=3,
+                linewidth=1, zorder=1, label='All points')
+
+        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        for i, s in enumerate(seg_results):
+            c = colors[i % len(colors)]
+            seg_e = s['all_energies']
+            final_y = (s['rdp_y'] | (manual_add & seg_e)) - (manual_remove & seg_e)
+            pairs = sorted(
+                [(og_cc[energy_to_idx[e]], e) for e in final_y if e in energy_to_idx],
+                key=lambda p: p[0]
+            )
+            if pairs:
+                xs, ys = zip(*pairs)
+                ax.plot(xs, ys, marker='o', markersize=9, color=c, zorder=2,
+                        label='Seg {} (RMSE={:.3f})'.format(i + 1, s['RMSE']))
+                ax.plot(xs[0], ys[0], 'o', markersize=9, c='red', zorder=3)
+                ax.plot(xs[-1], ys[-1], 'o', markersize=9, c='red', zorder=3)
+
+        for e in manual_add:
+            if e in energy_to_idx:
+                ax.plot(og_cc[energy_to_idx[e]], e, '+', markersize=16,
+                        markeredgewidth=2.5, c='lime', zorder=5)
+        for e in manual_remove:
+            if e in energy_to_idx:
+                ax.plot(og_cc[energy_to_idx[e]], e, 'x', markersize=16,
+                        markeredgewidth=2.5, c='crimson', zorder=5)
+
+        cc_unit = r'($^\circ$)' if cc_label.startswith(('A', 'D')) else r'(Å)'
+        ax.set_xlabel('Control Coordinate ' + cc_unit)
+        ax.set_ylabel(r'Relative Energy (kJ mol$^{-1}$)')
+        ax.legend(fontsize=8)
+        fig.canvas.draw_idle()
+
+    redraw(eps_val)
+
+    ax_tb   = plt.axes([0.12, 0.09, 0.22, 0.05])
+    ax_run  = plt.axes([0.37, 0.09, 0.10, 0.05])
+    ax_save = plt.axes([0.50, 0.09, 0.10, 0.05])
+
+    tb       = mwidgets.TextBox(ax_tb, 'Epsilon ', initial=str(eps_val))
+    btn_run  = mwidgets.Button(ax_run,  'Re-run')
+    btn_save = mwidgets.Button(ax_save, 'Save')
+
+    def on_rerun(_):
+        try:
+            eps = float(tb.text)
+        except ValueError:
+            print("Invalid epsilon value: {}".format(tb.text))
+            return
+        current_eps[0] = eps
+        redraw(eps)
+
+    def on_save(_):
+        seg_results = seg_cache[0]
+        if not seg_results:
+            return
+        all_sel = set()
+        for i, s in enumerate(seg_results):
+            seg_num = i + 1
+            seg_e = s['all_energies']
+            seg_y = (s['rdp_y'] | (manual_add & seg_e)) - (manual_remove & seg_e)
+            all_sel |= seg_y
+            seg_df = scan_df[scan_df['energy'].isin(seg_e)]
+            write_XYZ_methods(seg_df[seg_df['energy'].isin(seg_y)],
+                              'Segment{}/Selected_Points'.format(seg_num))
+            write_XYZ_methods(seg_df[~seg_df['energy'].isin(seg_y)],
+                              'Segment{}/Removed_Points'.format(seg_num))
+        scan_df['RDP_select'] = scan_df['energy'].isin(all_sel)
+        scan_df[['Control coord', 'energy', 'RDP_select']].to_csv('PES_Scan.csv')
+        fig.savefig('RDP_out.png', dpi=300, bbox_inches='tight')
+        print("Saved: RDP_out.png, PES_Scan.csv, Segment*/Selected_Points|Removed_Points")
+        plt.close(fig)
+
+    def on_click(event):
+        if event.inaxes != ax or event.button != 1:
+            return
+        cx, cy = event.xdata, event.ydata
+        if cx is None or cy is None:
+            return
+        xr = (ax.get_xlim()[1] - ax.get_xlim()[0]) or 1.0
+        yr = (ax.get_ylim()[1] - ax.get_ylim()[0]) or 1.0
+
+        best_j, best_d = None, float('inf')
+        for j, (ox, ey) in enumerate(zip(og_cc, energy_list)):
+            d = ((ox - cx) / xr) ** 2 + ((ey - cy) / yr) ** 2
+            if d < best_d:
+                best_d, best_j = d, j
+
+        if best_d > 0.0025:
+            return
+
+        e_val = energy_list[best_j]
+        if e_val in manual_add:
+            manual_add.discard(e_val)
+        elif e_val in manual_remove:
+            manual_remove.discard(e_val)
+        else:
+            rdp_sel = set()
+            for s in (seg_cache[0] or []):
+                rdp_sel |= s['rdp_y']
+            if e_val in rdp_sel:
+                manual_remove.add(e_val)
+            else:
+                manual_add.add(e_val)
+        redraw(current_eps[0])
+
+    btn_run.on_clicked(on_rerun)
+    btn_save.on_clicked(on_save)
+    fig.canvas.mpl_connect('button_press_event', on_click)
+    plt.show()
+
+
 def main():
     #Parsing USER INPUT
     global segments, cc_new
@@ -422,12 +619,18 @@ def main():
     parser = OptionParser(usage)
     parser.add_option("-r", "--epsilon", action='store', type='float', dest='epsilon_val',
                       help="Root Mean Squared error of confidence")
-    
+    parser.add_option("--gui", action='store_true', dest='use_gui', default=False,
+                      help="Launch interactive GUI for reviewing and adjusting RDP results")
+
     try:
         (option, args) = parser.parse_args()
         eps_val = option.epsilon_val
+        use_gui = option.use_gui
     except:
         eps_val = 0.3
+        use_gui = False
+
+    eps_val = eps_val if eps_val is not None else 0.3
 
     print(
         "RDP setup: searching for a new polyline with epsilon of {} ...".format(eps_val))
@@ -438,9 +641,20 @@ def main():
     wfn_energies = np.array(scan_df['energy'],dtype=float)
     cc = np.array(scan_df['Control coord'],dtype=float)
 
+    # For dihedral angles, roll data to start at a critical point so no
+    # segment is cut at the -180/180 wrap-around boundary
+    if cc_label.startswith('D'):
+        cc, wfn_energies = roll_to_critical_point(cc, wfn_energies)
+
     cc,wfn_energies, x_dict = re_fit_rdp(cc, wfn_energies) # Scaling the coordinates so the RDP works well
 
     og_cc = list(x_dict.values())
+
+    if use_gui:
+        run_gui(scan_df, cc_label, cc, wfn_energies, og_cc, eps_val)
+        return
+
+    plt.switch_backend('agg')
 
     # Search for critical points in the function
     if TRUE:
@@ -463,21 +677,27 @@ def main():
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
     for i,segment in enumerate(segments):
+        seg_num = i + 1
+        seg_cc_original = [x_dict[k] for k in cc_new[i]]
+
         if len(segment) > 2:
             x, y, RMSE = cross_validation_RDP(segment, cc_new[i], epsilon = eps_val)
-            x = [x_dict[i] for i in x]
+            x = [x_dict[k] for k in x]
         else:
-            x = cc_new[i]
-            x = [x_dict[i] for i in x]
+            x = [x_dict[k] for k in cc_new[i]]
             y = segment
             RMSE = 0.0
-        print("RMSE Segment {} = {}".format(i + 1, RMSE))
-        print("Points of the new polyline for Segment {} = {}".format(i + 1, x))
+        print("RMSE Segment {} = {}".format(seg_num, RMSE))
+        print("Points of the new polyline for Segment {} = {}".format(seg_num, x))
         plt.plot(x, y, marker='o', markersize=10)
         plt.plot(x[0], y[0], marker='o', markersize=10, c='red')
         plt.plot(x[-1], y[-1], marker='o', markersize=10, c='red')
 
         all_selected_points += y
+
+        seg_df = scan_df[scan_df['Control coord'].isin(seg_cc_original)]
+        write_XYZ_methods(seg_df[seg_df['energy'].isin(y)], 'Segment{}/Selected_Points'.format(seg_num))
+        write_XYZ_methods(seg_df[~seg_df['energy'].isin(y)], 'Segment{}/Removed_Points'.format(seg_num))
 
 
     plt.plot(og_cc, wfn_energies, c='#4d4d4d', marker='o', markersize=2)
@@ -486,13 +706,8 @@ def main():
     plt.ylabel(r'Relative Energy (kJ $\mathrm{mol^{-1}}$)')
     fig.savefig('RDP_out.png', dpi=300, bbox_inches='tight')
 
-    # Removing RDP geomerties for saving
-    select_rdp_df = scan_df[scan_df['energy'].isin(all_selected_points)]
-    removed_rdp_df = scan_df[~scan_df['energy'].isin(all_selected_points)]
     scan_df['RDP_select'] = scan_df['energy'].isin(all_selected_points)
     scan_df[['Control coord', 'energy','RDP_select']].to_csv('PES_Scan.csv')
-    write_XYZ_methods(select_rdp_df,'Selected_Points')
-    write_XYZ_methods(removed_rdp_df,'Removed_Points')
 
 if __name__ == "__main__":
     main()

@@ -162,11 +162,14 @@ def find_critical(Y,X, min_points=1, use_inflex=False):
         critical_point_list = [ ]
     else:
         ##    CHECKS MIN_POINTS CRITERIA
-        while (critical_point[0] < min_points-1) and (len(critical_point)!=0) : critical_point.remove(critical_point[0])
-        critical_point_list.append(critical_point[0])
-        for i in range(1, len(critical_point)):
-            if critical_point[i] - critical_point_list[-1] + 1 >= min_points:
-                critical_point_list.append(critical_point[i])
+        while (len(critical_point) != 0) and (critical_point[0] < min_points-1): critical_point.remove(critical_point[0])
+        if len(critical_point) == 0:
+            critical_point_list = []
+        else:
+            critical_point_list.append(critical_point[0])
+            for i in range(1, len(critical_point)):
+                if critical_point[i] - critical_point_list[-1] + 1 >= min_points:
+                    critical_point_list.append(critical_point[i])
         
     return critical_point_list
 
@@ -192,8 +195,10 @@ def split_segm(A, critical_point_list):
     """
     critical_point_list = list(set(critical_point_list)) ## Remove duplicates and sort in crescent order
     #ERRORS:
+    if len(critical_point_list) == 0: ## No critical points: return A as a single segment
+        return [list(A)]
     if critical_point_list[-1] >= len(A): ## Checks if index of critical point is in range of function
-        raise ValueError("Invalid critical point index") 
+        raise ValueError("Invalid critical point index")
 
     #INTERNAL VARIABLES:
     segm = [] ## array os arrays
