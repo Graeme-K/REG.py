@@ -147,7 +147,6 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
 
     return iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head
 
-@profile
 def main():
 
     ### STARTING TIMER ###
