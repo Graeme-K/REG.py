@@ -16,24 +16,35 @@ import warnings
 
 import numpy as np
 
+# Per-run cache so _parse_sum_file is only called once per (path, atom_list) pair.
+_CACHE_MISS = object()
+_sum_file_cache: dict = {}
+# Tracks .sum paths already warned about so each missing file is reported only once.
+_warned_sums: set = set()
+
 
 def _extract_section(lines, start_marker, end_marker):
     """Extract lines between start_marker and end_marker (exclusive).
 
-    Returns the list of lines in the section, or None if start_marker is
-    not found (signals that a fallback read is needed).
+    Returns (lines_in_section, end_marker_found):
+      - (None, False)  : start_marker was never seen — caller should fall back.
+      - (list, True)   : complete section; end_marker was found after start_marker.
+      - (list, False)  : start_marker was found but end_marker never appeared
+                         (e.g. some file types omit the end section entirely).
+                         The list contains everything from start_marker to EOF.
     """
     recording = False
     result = []
     for line in lines:
         if start_marker in line:
             recording = True
-        elif end_marker in line:
-            if recording:
-                return result
         elif recording:
+            if end_marker in line:
+                return result, True
             result.append(line)
-    return None  # start_marker not found (or file was truncated before end_marker)
+    if recording:
+        return result, False  # start found but end_marker absent in this chunk
+    return None, False        # start_marker not found at all
 
 
 def read_int_section_fast(filepath, start_marker, end_marker, max_bytes=8192):
@@ -56,19 +67,23 @@ def read_int_section_fast(filepath, start_marker, end_marker, max_bytes=8192):
         f.seek(-read_size, os.SEEK_END)
         chunk = f.read(read_size).decode('utf-8', errors='ignore')
 
-    result = _extract_section(chunk.split('\n'), start_marker, end_marker)
+    result, end_found = _extract_section(chunk.split('\n'), start_marker, end_marker)
 
-    if result is None and read_size < file_size:
-        # Section not found in the tail; fall back to reading the whole file.
+    # Fall back to a full read when:
+    #   - start_marker was not found in the tail (result is None), OR
+    #   - start was found but end_marker was not — and the tail didn't cover the
+    #     whole file, so the end_marker may exist earlier in the file.
+    needs_full_read = (result is None or not end_found) and read_size < file_size
+    if needs_full_read:
         warnings.warn(
-            "Section '{}' not found in last {} bytes of '{}'; "
+            "Section '{}' not found or incomplete in last {} bytes of '{}'; "
             "falling back to full file read. "
             "Consider increasing max_bytes.".format(start_marker, max_bytes, filepath),
             RuntimeWarning,
             stacklevel=3
         )
         with open(filepath, 'r', errors='ignore') as f:
-            result = _extract_section(f.read().split('\n'), start_marker, end_marker)
+            result, _ = _extract_section(f.read().split('\n'), start_marker, end_marker)
 
     return result  # None if not found; list of lines if found
 
@@ -129,18 +144,24 @@ _INTER_SUM_DERIVATIONS = {
 def _get_sum_path(atomicfiles_folder):
     """Derive the AIMAll .sum file path from an _atomicfiles folder path.
 
-    e.g. './RUN.pointdir/RUN_atomicfiles' -> './RUN.pointdir/RUN.sum'
+    The .sum file shares its stem with the wfn/wfx file and sits in the same
+    directory as the _atomicfiles folder.
+
+    e.g. './points/01/MOLECULE_atomicfiles' -> './points/01/MOLECULE.sum'
     """
     parent = os.path.dirname(atomicfiles_folder)
-    stem = os.path.basename(parent)
-    for suffix in ('.pointdir', '.pointsdir'):
-        if stem.endswith(suffix):
-            stem = stem[:-len(suffix)]
-            break
+    basename = os.path.basename(atomicfiles_folder)
+    if basename.endswith('_atomicfiles'):
+        stem = basename[:-len('_atomicfiles')]
+    else:
+        stem = basename
     return os.path.join(parent, stem + '.sum')
 
 def _parse_sum_file(sum_path, atom_list):
     """Parse an AIMAll .sum file and return structured data for all atoms.
+
+    Results are cached per (sum_path, atom_list) so the file is only read once
+    even when called from both intra and inter property functions.
 
     The .sum file collects all per-geometry IQA results in one place, making
     it possible to replace 190+ individual .int file reads with a single read.
@@ -158,10 +179,16 @@ def _parse_sum_file(sum_path, atom_list):
 
     Returns None on I/O error (file not found, unreadable, etc.).
     """
+    cache_key = (sum_path, tuple(atom_list))
+    cached = _sum_file_cache.get(cache_key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        return cached
+
     try:
         with open(sum_path, 'r', errors='ignore') as f:
             lines = f.readlines()
     except OSError:
+        _sum_file_cache[cache_key] = None
         return None
 
     atom_set = set(a.lower() for a in atom_list)
@@ -235,6 +262,7 @@ def _parse_sum_file(sum_path, atom_list):
 
         i += 1
 
+    _sum_file_cache[cache_key] = result
     return result
 
 def distance_A_B(xyz_file, atom_A, atom_B):
@@ -579,8 +607,8 @@ def inter_property_from_int_file(folders, prop, atom_list):
     # RAISING VALUE ERROR FOR MISSING FILE
     if len(missing_files) > 0:
         missing_file_message = 'The following files are missing:\n'
-        for missing_file in missing_files:
-            missing_file_message += missing_file + "\n"
+        #for missing_file in missing_files:
+            #missing_file_message += missing_file + "\n"
         raise ValueError(missing_file_message)
 
     # ORGANIZE ARRAY ORDER
@@ -601,6 +629,193 @@ def inter_property_from_int_file(folders, prop, atom_list):
                 contributions_list.append(a + '-' + atom_list[i] + '_' + atom_list[j])
 
     return inter_properties, contributions_list, missing_files
+
+
+def get_lagrangians(folders, atoms):
+    """Read the Lagrangian L(A) for every atom at every geometry point.
+
+    Tries the cached .sum file first; falls back to each atom's .int file
+    (reading the 'Results of the basin integration:' section) for any atom
+    whose L(A) is absent from the .sum data.
+
+    Parameters
+    ----------
+    folders : list of _atomicfiles folder paths, one per geometry point.
+    atoms   : list of atom labels, e.g. ['c1', 'h2', ...].
+
+    Returns
+    -------
+    list of dicts, one per folder.  Each dict maps atom label -> float (L value)
+    or -> None if the value could not be read.
+    """
+    result = []
+    for folder in folders:
+        sum_path = _get_sum_path(folder)
+        sum_data = _parse_sum_file(sum_path, atoms)   # free — already cached
+        folder_L = {}
+        for atom in atoms:
+            atom_sum = (sum_data or {}).get('intra', {}).get(atom, {})
+            if 'L(A)' in atom_sum:
+                folder_L[atom] = atom_sum['L(A)']
+                continue
+            # Fall back to the .int file basin integration section.
+            lines = read_int_section_fast(
+                folder + '/' + atom + '.int',
+                'Results of the basin integration:',
+                '|Dipole|')
+            L_val = None
+            if lines is not None:
+                for line in lines:
+                    tokens = line.split()
+                    if len(tokens) >= 3 and tokens[0] == 'L' and tokens[1] == '=':
+                        try:
+                            L_val = float(tokens[2])
+                        except ValueError:
+                            pass
+                        break
+            folder_L[atom] = L_val
+        result.append(folder_L)
+    return result
+
+
+def get_iqa_properties(folders, intra_prop, inter_prop, atoms):
+    """Read intra- and inter-atomic IQA properties for all geometry folders.
+
+    Parses each folder's .sum file once (result is cached).  Falls back to
+    individual .int files only for atoms or atom-pairs whose data is absent
+    from the .sum file, giving a granular fallback rather than an all-or-nothing
+    switch between the two sources.
+
+    Parameters
+    ----------
+    folders    : list of _atomicfiles folder paths, one per geometry point.
+    intra_prop : list of intra-atomic property names, e.g. ['E_IQA_Intra(A)'].
+    inter_prop : list of inter-atomic property names, e.g. ['VC_IQA(A,B)', 'VX_IQA(A,B)'].
+                 Pass an empty list to collect only intra-atomic data.
+    atoms      : list of atom labels, e.g. ['c1', 'h2', ...].
+
+    Returns
+    -------
+    intra_properties : list of arrays, one per (intra_prop x atom), values across folders.
+    intra_headers    : matching label strings, e.g. 'E_IQA_Intra(A)-c1'.
+    inter_properties : list of arrays, one per (inter_prop x pair), values across folders.
+    inter_headers    : matching label strings, e.g. 'VC_IQA(A,B)-c1_h2'.
+
+    Raises
+    ------
+    ValueError : lists every .int file that could not be read before aborting.
+    """
+    n_atoms = len(atoms)
+    pairs = [(atoms[i], atoms[j])
+             for i in range(n_atoms)
+             for j in range(i + 1, n_atoms)]
+
+    _inter_derivable = bool(inter_prop) and all(p in _INTER_SUM_DERIVATIONS for p in inter_prop)
+
+    # Whitespace patterns used to locate values inside .int file sections.
+    intra_patterns = {p: p + '           ' for p in intra_prop}  # 11 spaces
+    inter_patterns = {p: p + '  '         for p in inter_prop}   # 2 spaces
+
+    # Accumulate one value-list per (prop, atom/pair) across folders.
+    intra_vals = {p: {a: []  for a in atoms}  for p in intra_prop}
+    inter_vals = {p: {pr: [] for pr in pairs} for p in inter_prop}
+    missing_files = []
+
+    for folder in folders:
+        sum_path = _get_sum_path(folder)
+        sum_data = _parse_sum_file(sum_path, atoms)  # cached after first call
+
+        if sum_data is None and sum_path not in _warned_sums:
+            warnings.warn(
+                "No .sum file at '{}'; falling back to .int files.".format(sum_path),
+                RuntimeWarning, stacklevel=2)
+            _warned_sums.add(sum_path)
+
+        # ---- intra-atomic ------------------------------------------------
+        for atom in atoms:
+            atom_sum = (sum_data or {}).get('intra', {}).get(atom, {})
+
+            if all(p in atom_sum for p in intra_prop):
+                for p in intra_prop:
+                    intra_vals[p][atom].append(atom_sum[p])
+                continue
+
+            # .sum missing or incomplete for this atom — read its .int file.
+            int_path = folder + '/' + atom + '.int'
+            lines = read_int_section_fast(
+                int_path,
+                'IQA Energy Components (see "2EDM Note")',
+                '2EDM Note:')
+            if lines is None:
+                missing_files.append(int_path)
+                continue
+            found = {}
+            for line in lines:
+                for p in intra_prop:
+                    if p not in found and intra_patterns[p] in line:
+                        found[p] = float(line.split()[-1])
+                        break
+            if not all(p in found for p in intra_prop):
+                missing_files.append(int_path)
+                continue
+            for p in intra_prop:
+                intra_vals[p][atom].append(found[p])
+
+        # ---- inter-atomic ------------------------------------------------
+        for (atom1, atom2) in pairs:
+            if not inter_prop:
+                continue
+
+            if sum_data is not None and _inter_derivable:
+                cols = sum_data['inter'].get((atom1, atom2))
+                if cols is not None:
+                    for p in inter_prop:
+                        inter_vals[p][(atom1, atom2)].append(_INTER_SUM_DERIVATIONS[p](cols))
+                    continue
+
+            # .sum missing, not derivable, or pair absent — read pair .int file.
+            int_path = folder + '/' + atom1 + '_' + atom2 + '.int'
+            lines = read_int_section_fast(
+                int_path,
+                ' Energy Components (See "2EDM Note"):',
+                '2EDM Note:')
+            if lines is None:
+                missing_files.append(int_path)
+                continue
+            found = {}
+            for line in lines:
+                for p in inter_prop:
+                    if p not in found and inter_patterns[p] in line:
+                        found[p] = float(line.split()[-1])
+                        break
+            if not all(p in found for p in inter_prop):
+                missing_files.append(int_path)
+                continue
+            for p in inter_prop:
+                inter_vals[p][(atom1, atom2)].append(found[p])
+
+    if missing_files:
+        raise ValueError('The following files are missing or incomplete:\n'
+                         + '\n'.join(missing_files) + '\n')
+
+    # ---- build output arrays in the same layout as the legacy functions ----
+    # Order: prop outer, atom/pair inner; each element is a list of N_folder values.
+    intra_properties = []
+    intra_headers = []
+    for p in intra_prop:
+        for atom in atoms:
+            intra_properties.append(intra_vals[p][atom])
+            intra_headers.append(p + '-' + atom)
+
+    inter_properties = []
+    inter_headers = []
+    for p in inter_prop:
+        for (atom1, atom2) in pairs:
+            inter_properties.append(inter_vals[p][(atom1, atom2)])
+            inter_headers.append(p + '-' + atom1 + '_' + atom2)
+
+    return intra_properties, intra_headers, inter_properties, inter_headers
+
 
 def charge_transfer_and_polarisation_from_int_file(folders, atom_list, inter_properties, xyz_files):
     """

@@ -14,6 +14,24 @@ coded by L. J. Duarte and F. Falcioni
 import re
 import numpy as np
 
+ATOMIC_NUMBER_TO_SYMBOL = {
+    1: 'H',   2: 'He',  3: 'Li',  4: 'Be',  5: 'B',   6: 'C',   7: 'N',   8: 'O',
+    9: 'F',  10: 'Ne', 11: 'Na', 12: 'Mg', 13: 'Al', 14: 'Si', 15: 'P',  16: 'S',
+   17: 'Cl', 18: 'Ar', 19: 'K',  20: 'Ca', 21: 'Sc', 22: 'Ti', 23: 'V',  24: 'Cr',
+   25: 'Mn', 26: 'Fe', 27: 'Co', 28: 'Ni', 29: 'Cu', 30: 'Zn', 31: 'Ga', 32: 'Ge',
+   33: 'As', 34: 'Se', 35: 'Br', 36: 'Kr', 37: 'Rb', 38: 'Sr', 39: 'Y',  40: 'Zr',
+   41: 'Nb', 42: 'Mo', 43: 'Tc', 44: 'Ru', 45: 'Rh', 46: 'Pd', 47: 'Ag', 48: 'Cd',
+   49: 'In', 50: 'Sn', 51: 'Sb', 52: 'Te', 53: 'I',  54: 'Xe', 55: 'Cs', 56: 'Ba',
+   57: 'La', 58: 'Ce', 59: 'Pr', 60: 'Nd', 61: 'Pm', 62: 'Sm', 63: 'Eu', 64: 'Gd',
+   65: 'Tb', 66: 'Dy', 67: 'Ho', 68: 'Er', 69: 'Tm', 70: 'Yb', 71: 'Lu', 72: 'Hf',
+   73: 'Ta', 74: 'W',  75: 'Re', 76: 'Os', 77: 'Ir', 78: 'Pt', 79: 'Au', 80: 'Hg',
+   81: 'Tl', 82: 'Pb', 83: 'Bi', 84: 'Po', 85: 'At', 86: 'Rn', 87: 'Fr', 88: 'Ra',
+   89: 'Ac', 90: 'Th', 91: 'Pa', 92: 'U',  93: 'Np', 94: 'Pu', 95: 'Am', 96: 'Cm',
+   97: 'Bk', 98: 'Cf', 99: 'Es',100: 'Fm',101: 'Md',102: 'No',103: 'Lr',104: 'Rf',
+  105: 'Db',106: 'Sg',107: 'Bh',108: 'Hs',109: 'Mt',110: 'Ds',111: 'Rg',112: 'Cn',
+  113: 'Nh',114: 'Fl',115: 'Mc',116: 'Lv',117: 'Ts',118: 'Og',
+}
+
 def get_atom_list_wfn_g09(wfn_file):
     """
     ###########################################################################################################
@@ -227,7 +245,7 @@ def get_xyz_file(g16_single_point_output):
     '''
     start = 0
     end = 0
-    xyz_output = str(g16_single_point_output[:-3]) + "xyz"
+    xyz_output = str(g16_single_point_output[:-4]) + "_gauout.xyz"
 
     openold= open(g16_single_point_output, 'r')
     opennew= open(xyz_output, 'w')
@@ -244,101 +262,8 @@ def get_xyz_file(g16_single_point_output):
     ## convert atomic number to atomic symbol
     for line in rlines[start+5 : end] :
         words = line.split()
-        word1 = int(words[1])
+        word1 = ATOMIC_NUMBER_TO_SYMBOL[int(words[1])]
         word3 = str(words[3])
-        ## Periodic table supported
-        ## Your molecule should comprise only atoms between 1-90
-
-        if   word1 ==   1 : word1 = "H"
-        elif word1 ==   2 : word1 = "He"
-        elif word1 ==   3 : word1 = "Li"
-        elif word1 ==   4 : word1 = "Be"
-        elif word1 ==   5 : word1 = "B"
-        elif word1 ==   6 : word1 = "C"
-        elif word1 ==   7 : word1 = "N"
-        elif word1 ==   8 : word1 = "O"
-        elif word1 ==   9 : word1 = "F"
-        elif word1 ==  10 : word1 = "Ne"
-        elif word1 ==  11 : word1 = "Na"
-        elif word1 ==  12 : word1 = "Mg"
-        elif word1 ==  13 : word1 = "Al"
-        elif word1 ==  14 : word1 = "Si"
-        elif word1 ==  15 : word1 = "P"
-        elif word1 ==  16 : word1 = "S"
-        elif word1 ==  17 : word1 = "Cl"
-        elif word1 ==  18 : word1 = "Ar"
-        elif word1 ==  19 : word1 = "K"
-        elif word1 ==  20 : word1 = "Ca"
-        elif word1 ==  21 : word1 = "Sc"
-        elif word1 ==  22 : word1 = "Ti"
-        elif word1 ==  23 : word1 = "V"
-        elif word1 ==  24 : word1 = "Cr"
-        elif word1 ==  25 : word1 = "Mn"
-        elif word1 ==  26 : word1 = "Fe"
-        elif word1 ==  27 : word1 = "Co"
-        elif word1 ==  28 : word1 = "Ni"
-        elif word1 ==  29 : word1 = "Cu"
-        elif word1 ==  30 : word1 = "Zn"
-        elif word1 ==  31 : word1 = "Ga"
-        elif word1 ==  32 : word1 = "Ge"
-        elif word1 ==  33 : word1 = "As"
-        elif word1 ==  34 : word1 = "Se"
-        elif word1 ==  35 : word1 = "Br"
-        elif word1 ==  36 : word1 = "Kr"
-        elif word1 ==  37 : word1 = "Rb"
-        elif word1 ==  38 : word1 = "Sr"
-        elif word1 ==  39 : word1 = "Y"
-        elif word1 ==  40 : word1 = "Zr"
-        elif word1 ==  41 : word1 = "Nb"
-        elif word1 ==  42 : word1 = "Mo"
-        elif word1 ==  43 : word1 = "Tc"
-        elif word1 ==  44 : word1 = "Ru"
-        elif word1 ==  45 : word1 = "Rh"
-        elif word1 ==  46 : word1 = "Pd"
-        elif word1 ==  47 : word1 = "Ag"
-        elif word1 ==  48 : word1 = "Cd"
-        elif word1 ==  49 : word1 = "In"
-        elif word1 ==  50 : word1 = "Sn"
-        elif word1 ==  51 : word1 = "Sb"
-        elif word1 ==  52 : word1 = "Te"
-        elif word1 ==  53 : word1 = "I"
-        elif word1 ==  54 : word1 = "Xe"
-        elif word1 ==  55 : word1 = "Cs"
-        elif word1 ==  56 : word1 = "Ba"
-        elif word1 ==  57 : word1 = "La"
-        elif word1 ==  58 : word1 = "Ce"
-        elif word1 ==  59 : word1 = "Pr"
-        elif word1 ==  60 : word1 = "Nd"
-        elif word1 ==  61 : word1 = "Pm"
-        elif word1 ==  62 : word1 = "Sm"
-        elif word1 ==  63 : word1 = "Eu"
-        elif word1 ==  64 : word1 = "Gd"
-        elif word1 ==  65 : word1 = "Tb"
-        elif word1 ==  66 : word1 = "Dy"
-        elif word1 ==  67 : word1 = "Ho"
-        elif word1 ==  68 : word1 = "Er"
-        elif word1 ==  69 : word1 = "Tm"
-        elif word1 ==  70 : word1 = "Yb"
-        elif word1 ==  71 : word1 = "Lu"
-        elif word1 ==  72 : word1 = "Hf"
-        elif word1 ==  73 : word1 = "Ta"
-        elif word1 ==  74 : word1 = "W"
-        elif word1 ==  75 : word1 = "Re"
-        elif word1 ==  76 : word1 = "Os"
-        elif word1 ==  77 : word1 = "Ir"
-        elif word1 ==  78 : word1 = "Pt"
-        elif word1 ==  79 : word1 = "Au"
-        elif word1 ==  80 : word1 = "Hg"
-        elif word1 ==  81 : word1 = "Tl"
-        elif word1 ==  82 : word1 = "Pb"
-        elif word1 ==  83 : word1 = "Bi"
-        elif word1 ==  84 : word1 = "Po"
-        elif word1 ==  85 : word1 = "At"
-        elif word1 ==  86 : word1 = "Rn"
-        elif word1 ==  87 : word1 = "Fe"
-        elif word1 ==  88 : word1 = "Ra"
-        elif word1 ==  89 : word1 = "Ac"
-        elif word1 ==  90 : word1 = "Th"
 
         ## copy from atom list.
 

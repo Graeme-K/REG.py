@@ -246,11 +246,29 @@ def main():
                 reg_folder_list.append(root)
                 WFX = True
                 
-            elif name.endswith(".out") or name.endswith(".log") or name.endswith(".gaussianoutput"):
+            elif (name.endswith(".out") or name.endswith(".log") or name.endswith(".gaussianoutput")) and not (name.startswith("dft-d3") or name.startswith("slurm")):
                 gau16_file.append(os.path.join(root,name))
 
     # Sorting all folders based on REG folders
-    all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file),key=lambda f: int(re.sub(r'\D', '', f[0])))
+    def _folder_val(name):
+        name = re.sub(r'^neg_?', '-', name)
+        name = re.sub(r'(?<=\d)_', '.', name)
+        match = re.search(r'-?\d+\.?\d*', name)
+        return float(match.group()) if match else float('inf')
+
+    all_files_sorted = sorted(zip(reg_folders,reg_folder_list,wf_file,gau16_file), key=lambda f: _folder_val(f[0]))
+
+    # If folder values look like angles (dihedral range), roll to start after the
+    # largest gap — mirrors roll_to_critical_point in setup_rdp.py to avoid
+    # splitting a continuous sequence at the -180/180 boundary.
+    vals = [_folder_val(t[0]) for t in all_files_sorted]
+    if vals and all(-360 <= v <= 360 for v in vals) and (max(vals) - min(vals)) > 90:
+        gaps = [vals[i+1] - vals[i] for i in range(len(vals) - 1)]
+        wrap_gap = vals[0] + 360 - vals[-1]
+        all_gaps = gaps + [wrap_gap]
+        max_gap_idx = all_gaps.index(max(all_gaps))
+        if max_gap_idx < len(gaps):  # wrap-around gap is not the largest — roll needed
+            all_files_sorted = all_files_sorted[max_gap_idx+1:] + all_files_sorted[:max_gap_idx+1]
 
     reg_folders,reg_root_list,wf_files,g16_out_files = list(zip(*all_files_sorted))
         
@@ -288,7 +306,7 @@ def main():
         X_LABEL = r"Control Coordinate r[$\AA$]"
     else:
         #cc = [int(reg_folders[i]) for i in range(0, len(reg_folders))]
-        cc = [float(re.search(r'\d+(?:\.\d+)?', reg_folders[i]).group()) for i in range(0, len(reg_folders)) ]
+        cc = [float(re.search(r'-?\d+(?:\.\d+)?', reg_folders[i]).group()) for i in range(0, len(reg_folders)) ]
         X_LABEL = "Control Coordinate [REG step]"
     cc = np.array(cc)
     if REVERSE:
@@ -306,44 +324,20 @@ def main():
 
 
 
+    # GET INTRA AND INTER IQA TERMS (single .sum parse per geometry point):
+    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header = aim_u.get_iqa_properties(
+        atomic_files, intra_prop, inter_prop, atoms)
+    iqa_intra = np.array(iqa_intra)
+    iqa_intra_header = np.array(iqa_intra_header)
+    iqa_inter = np.array(iqa_inter)
+    iqa_inter_header = np.array(iqa_inter_header)
+
     if IQF:
-        # GET INTRA-ATOMIC TERMS:
-        iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
-        iqa_intra_header = np.array(iqa_intra_header)  # used for reference
-        iqa_intra = np.array(iqa_intra)
-        # GET INTER-ATOMIC TERMS:
-        iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
-        iqa_inter_header = np.array(iqa_inter_header)  # used for reference
-        iqa_inter = np.array(iqa_inter)
-
         iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head = sum_into_fragments(Frag_names,List_of_frags,atoms,True,iqa_inter,inter_prop,[],iqa_intra,intra_prop)
-
-        iqa_intra_header = np.array(iqf_intra_header)
-        iqa_inter_header = np.array(iqf_inter_header)
-
-
         iqa_intra = iqf_intra
+        iqa_intra_header = np.array(iqf_intra_header)
         iqa_inter = iqf_inter
-
-
-    else:
-        # GET INTRA-ATOMIC TERMS:
-        iqa_intra, iqa_intra_header,missing_intra = aim_u.intra_property_from_int_file(atomic_files, intra_prop, atoms)
-        iqa_intra_header = np.array(iqa_intra_header)  # used for reference
-        iqa_intra = np.array(iqa_intra)
-        # GET INTER-ATOMIC TERMS:
-        iqa_inter, iqa_inter_header,missing_inter = aim_u.inter_property_from_int_file(atomic_files, inter_prop, atoms)
-        iqa_inter_header = np.array(iqa_inter_header)  # used for reference
-        iqa_inter = np.array(iqa_inter)
-
-
-    # RAISING VALUE ERROR FOR MISSING FILE
-    missing_files = missing_intra + missing_inter
-    if len(missing_files) > 0:
-        missing_file_message = 'The following files are missing:\n'
-        for missing_file in missing_files:
-            missing_file_message += missing_file + "\n"
-        raise ValueError(missing_file_message)
+        iqa_inter_header = np.array(iqf_inter_header)
 
     ###############################################################################
     #                                                                             #
@@ -417,15 +411,68 @@ def main():
             iqf_intra_comp_list.append(reg_int)
 
     # CALCULATE TOTAL ENERGIES
-    total_energy_iqa = sum(iqa_inter[:(len(atoms)*(len(atoms)-1))]) + sum(iqa_intra[:len(atoms)])  # used to calculate the integration error
+    # Sum the per-atom E_IQA(A) from the .sum file intra table directly.  This is the
+    # authoritative total (E_IQA_Intra + half-sum of inter pairs as AIMAll accounts for
+    # the "A'=Mol-A" correction), and avoids the ~3 kJ/mol error that arises from summing
+    # individual pair E_IQA_Inter(A,B)/2 values whose sum ("SumB") differs from the
+    # corrected per-atom inter contribution ("A'=Mol-A") stored in the .sum file.
+    _iqa_atom_total, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['E_IQA(A)'], [], atoms)
+    _iqa_atom_total = np.array(_iqa_atom_total)
+    total_energy_iqa = sum(_iqa_atom_total[:len(atoms)])
 
     # CALCULATE RECOVERY ERROR
-    if DISPERSION:
-        rmse_integration = reg.integration_error(total_energy_wfn, total_energy_iqa + total_energy_dispersion)
+    iqa_for_error = total_energy_iqa + total_energy_dispersion if DISPERSION else total_energy_iqa
+    per_step_errors_ha, rmse_kj = reg.integration_error(total_energy_wfn, iqa_for_error)
+    per_step_errors_kj = [2625.5 * e for e in per_step_errors_ha]
+
+    # READ LAGRANGIANS
+    lagrangians = aim_u.get_lagrangians(atomic_files, atoms)
+    _L_THRESHOLD = 1e-4
+    bad_L = []  # (step_label, atom, L_value)
+    for i, folder_L in enumerate(lagrangians):
+        for atom, L_val in folder_L.items():
+            if L_val is not None and abs(L_val) > _L_THRESHOLD:
+                bad_L.append((reg_folders[i], atom, L_val))
+
+    # BUILD ERROR REPORT (printed to stdout and written to file)
+    sep_wide  = '=' * 90
+    sep_inner = '-' * 90
+    lines_out = []
+    lines_out.append(sep_wide)
+    lines_out.append('  IQA INTEGRATION ERROR REPORT')
+    lines_out.append(sep_wide)
+    lines_out.append('')
+    lines_out.append('  {:<25s} {:>12s}  {:>18s}  {:>18s}  {:>22s}'.format(
+        'Step', 'CC', 'WFN energy (Ha)', 'IQA energy (Ha)', 'Recovery error (kJ/mol)'))
+    lines_out.append('  ' + sep_inner)
+    for i in range(len(reg_folders)):
+        flag = '  ***' if abs(per_step_errors_kj[i]) > 1.0 else ''
+        lines_out.append('  {:<25s} {:>12.4f}  {:>18.8f}  {:>18.8f}  {:>+22.4f}{}'.format(
+            reg_folders[i], float(cc[i]),
+            total_energy_wfn[i], iqa_for_error[i],
+            per_step_errors_kj[i], flag))
+    lines_out.append('  ' + sep_inner)
+    lines_out.append('  Recovery error RMSE: {:.4f} kJ/mol'.format(rmse_kj))
+    lines_out.append('')
+    lines_out.append(sep_wide)
+    lines_out.append('  LAGRANGIAN QUALITY REPORT  (threshold: |L(A)| < {:.0e})'.format(_L_THRESHOLD))
+    lines_out.append(sep_wide)
+    lines_out.append('')
+    if not bad_L:
+        lines_out.append('  All atoms within threshold at every geometry point.')
     else:
-        rmse_integration = reg.integration_error(total_energy_wfn, total_energy_iqa)
-    print('Integration error [kJ/mol](RMSE)')
-    print(rmse_integration[1])
+        lines_out.append('  Atoms exceeding threshold (*** = poor integration):')
+        lines_out.append('  {:<25s}  {:>6s}  {:>16s}'.format('Step', 'Atom', 'L(A)'))
+        lines_out.append('  ' + '-' * 52)
+        for step_lbl, atom, L_val in bad_L:
+            lines_out.append('  {:<25s}  {:>6s}  {:>+16.6e}  ***'.format(step_lbl, atom, L_val))
+    lines_out.append('')
+
+    report_text = '\n'.join(lines_out)
+    print(report_text)
+    error_report_path = cwd + '/' + SYS + '_results/integration_errors.txt'
+    with open(error_report_path, 'w') as _ef:
+        _ef.write(report_text + '\n')
 
     ###############################################################################
     #                                                                             #
@@ -446,6 +493,7 @@ def main():
         df_energy_output.index = cc
         if DISPERSION:
             df_energy_output['D3'] = total_energy_dispersion
+            df_energy_output['IQA+D3'] = total_energy_iqa + total_energy_dispersion
         df_energy_output.to_csv('total_energy.csv', sep=',')
         df_energy_output.to_excel(energy_writer, sheet_name="total_energies")
 

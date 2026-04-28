@@ -134,13 +134,20 @@ def data_compile(cc_list,energy_list,theory_level_list,xyz_list,cc_label):
 
     data_df = data_df.drop_duplicates(subset='Control coord').sort_values('Control coord').reset_index(drop=True)
 
-    # For CC values within 1° of each other (e.g. from different files), keep only the lowest energy point
+    # For CC values very close to each other (e.g. from different files), keep only the lowest energy point.
+    # Use half the median step size as the threshold so that genuinely distinct scan steps
+    # (e.g. R scans with small Angstrom steps) are never merged.
+    if len(data_df) > 1:
+        step_sizes = data_df['Control coord'].diff().dropna().abs()
+        threshold = float(step_sizes.median()) * 0.5
+    else:
+        threshold = 0.0
     keep = []
     i = 0
     while i < len(data_df):
         group_cc = data_df.iloc[i]['Control coord']
         j = i + 1
-        while j < len(data_df) and (data_df.iloc[j]['Control coord'] - group_cc) < 1.0:
+        while j < len(data_df) and (data_df.iloc[j]['Control coord'] - group_cc) < threshold:
             j += 1
         keep.append(data_df.iloc[i:j]['energy'].astype(float).idxmin())
         i = j
@@ -299,10 +306,20 @@ def re_fit_rdp(X,Y):
     X, Y = (list(t) for t in zip(*sorted(zip(X, Y))))
     max_Y = max(Y)
     min_Y = min(Y)
-    delta_Y_av = (max_Y - min_Y)/(len(Y)-1)
-    delta_X_av = (max(X)-min(X)) / (len(X)-1)
+    x_range = max(X) - min(X)
+    y_range = max_Y - min_Y
+
+    # Degenerate case: flat/near-flat energy surface or single point — scaling
+    # would collapse all coordinates to the same key, losing all but one point.
+    # Fall back to using original X coordinates directly.
+    if len(X) <= 1 or x_range == 0 or y_range == 0:
+        x_dict = {x: x for x in X}
+        return X, Y, x_dict
+
+    delta_Y_av = y_range / (len(Y)-1)
+    delta_X_av = x_range / (len(X)-1)
     delta_X_scale = delta_Y_av / delta_X_av
-    
+
     new_X = {min_Y : X[0]}
 
     for i in range(len(X)-1):

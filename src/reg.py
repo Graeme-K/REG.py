@@ -103,7 +103,7 @@ def find_critical(Y,X, min_points=1, use_inflex=False):
     if use_inflex != True and use_inflex != False: ## Checks if use_inlflex is valid
         raise ValueError("Invalid value. Use True or False")
     if min_points >= len(X):
-        raise ValueError("Too many points between two critical points") ## Check if min_points is valid.
+        return []  ## Array too short to find critical points with this min_points; treat as no critical points.
    
     #INTERNAL VARIABLES:
     critical_point = [] ## temporary array
