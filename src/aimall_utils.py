@@ -13,6 +13,7 @@ coded by L. J. Duarte
 
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -58,14 +59,18 @@ def read_int_section_fast(filepath, start_marker, end_marker, max_bytes=8192):
     or the section is near the start of the file) a full file read is
     performed with a warning so correctness is never compromised.
 
-    Returns a list of lines inside the section, or None if not found anywhere.
+    Returns a list of lines inside the section, or None if not found anywhere
+    (including when the file does not exist or cannot be opened).
     """
-    with open(filepath, 'rb') as f:
-        f.seek(0, os.SEEK_END)
-        file_size = f.tell()
-        read_size = min(max_bytes, file_size)
-        f.seek(-read_size, os.SEEK_END)
-        chunk = f.read(read_size).decode('utf-8', errors='ignore')
+    try:
+        with open(filepath, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            read_size = min(max_bytes, file_size)
+            f.seek(-read_size, os.SEEK_END)
+            chunk = f.read(read_size).decode('utf-8', errors='ignore')
+    except OSError:
+        return None
 
     result, end_found = _extract_section(chunk.split('\n'), start_marker, end_marker)
 
@@ -678,6 +683,91 @@ def get_lagrangians(folders, atoms):
     return result
 
 
+def _process_one_folder(args):
+    """Parse one geometry folder and return its intra/inter property values.
+
+    Designed to run inside a ThreadPoolExecutor: each folder is independent,
+    so all folders can be parsed concurrently while NFS latency is overlapped.
+
+    Returns
+    -------
+    tuple: (fi, intra_results, intra_missing, inter_results,
+            inter_missing_pairs, sum_path, sum_was_none)
+      fi                 : folder index (preserves insertion order after merge)
+      intra_results      : dict {(prop, atom): float}
+      intra_missing      : list of .int paths that could not be read
+      inter_results      : dict {(prop, (atom1, atom2)): float}
+      inter_missing_pairs: list of (atom1, atom2) pairs that could not be read
+      sum_path           : str — path of the .sum file (used for warning dedup)
+      sum_was_none       : bool — True when no .sum file was found
+    """
+    (fi, folder, atoms, pairs, intra_prop, inter_prop,
+     _inter_derivable, intra_patterns, inter_patterns) = args
+
+    sum_path = _get_sum_path(folder)
+    sum_data = _parse_sum_file(sum_path, atoms)
+
+    intra_results = {}
+    intra_missing = []
+
+    for atom in atoms:
+        atom_sum = (sum_data or {}).get('intra', {}).get(atom, {})
+        if all(p in atom_sum for p in intra_prop):
+            for p in intra_prop:
+                intra_results[(p, atom)] = atom_sum[p]
+            continue
+        int_path = folder + '/' + atom + '.int'
+        lines = read_int_section_fast(
+            int_path, 'IQA Energy Components (see "2EDM Note")', '2EDM Note:')
+        if lines is None:
+            intra_missing.append(int_path)
+            continue
+        found = {}
+        for line in lines:
+            for p in intra_prop:
+                if p not in found and intra_patterns[p] in line:
+                    found[p] = float(line.split()[-1])
+                    break
+        if not all(p in found for p in intra_prop):
+            intra_missing.append(int_path)
+            continue
+        for p in intra_prop:
+            intra_results[(p, atom)] = found[p]
+
+    inter_results = {}
+    inter_missing_pairs = []
+
+    for (atom1, atom2) in pairs:
+        if not inter_prop:
+            continue
+        if sum_data is not None and _inter_derivable:
+            cols = sum_data['inter'].get((atom1, atom2))
+            if cols is not None:
+                for p in inter_prop:
+                    inter_results[(p, (atom1, atom2))] = _INTER_SUM_DERIVATIONS[p](cols)
+                continue
+        int_path = folder + '/' + atom1 + '_' + atom2 + '.int'
+        lines = read_int_section_fast(
+            int_path, ' Energy Components (See "2EDM Note"):', '2EDM Note:')
+        pair_ok = False
+        if lines is not None:
+            found = {}
+            for line in lines:
+                for p in inter_prop:
+                    if p not in found and inter_patterns[p] in line:
+                        found[p] = float(line.split()[-1])
+                        break
+            if all(p in found for p in inter_prop):
+                for p in inter_prop:
+                    inter_results[(p, (atom1, atom2))] = found[p]
+                pair_ok = True
+        if not pair_ok:
+            inter_missing_pairs.append((atom1, atom2))
+
+    return (fi, intra_results, intra_missing, inter_results,
+            inter_missing_pairs, sum_path, sum_data is None)
+
+
 def get_iqa_properties(folders, intra_prop, inter_prop, atoms):
     """Read intra- and inter-atomic IQA properties for all geometry folders.
 
@@ -717,86 +807,66 @@ def get_iqa_properties(folders, intra_prop, inter_prop, atoms):
     inter_patterns = {p: p + '  '         for p in inter_prop}   # 2 spaces
 
     # Accumulate one value-list per (prop, atom/pair) across folders.
-    intra_vals = {p: {a: []  for a in atoms}  for p in intra_prop}
-    inter_vals = {p: {pr: [] for pr in pairs} for p in inter_prop}
-    missing_files = []
+    # None is used as a placeholder for missing inter-pair values so that
+    # we can detect atom-level integration failures after the folder loop.
+    intra_vals = {p: {a: []        for a in atoms}  for p in intra_prop}
+    inter_vals = {p: {pr: []       for pr in pairs} for p in inter_prop}
+    intra_missing_files = []   # intra misses are always fatal
+    inter_missing = []         # (folder_index, pair) for per-atom analysis
 
-    for folder in folders:
-        sum_path = _get_sum_path(folder)
-        sum_data = _parse_sum_file(sum_path, atoms)  # cached after first call
+    # ---- parallel folder parsing -------------------------------------------
+    # Each folder is independent, so we parse them concurrently.  Threads
+    # overlap NFS latency: while one thread waits for a file read to return,
+    # others can be issuing their own reads.  The GIL is released during I/O
+    # so multiple threads make genuine parallel progress.
+    folder_args = [
+        (fi, folder, atoms, pairs, intra_prop, inter_prop,
+         _inter_derivable, intra_patterns, inter_patterns)
+        for fi, folder in enumerate(folders)
+    ]
+    max_workers = min(32, len(folders))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # executor.map preserves submission order, so results[i] corresponds
+        # to folders[i] — no sorting needed.
+        folder_results = list(executor.map(_process_one_folder, folder_args))
 
-        if sum_data is None and sum_path not in _warned_sums:
+    # ---- merge results into accumulator dicts (main thread, in order) ------
+    for (fi, intra_r, intra_miss, inter_r,
+         inter_miss_pairs, sum_path, sum_was_none) in folder_results:
+
+        if sum_was_none and sum_path not in _warned_sums:
             warnings.warn(
                 "No .sum file at '{}'; falling back to .int files.".format(sum_path),
                 RuntimeWarning, stacklevel=2)
             _warned_sums.add(sum_path)
 
-        # ---- intra-atomic ------------------------------------------------
         for atom in atoms:
-            atom_sum = (sum_data or {}).get('intra', {}).get(atom, {})
-
-            if all(p in atom_sum for p in intra_prop):
-                for p in intra_prop:
-                    intra_vals[p][atom].append(atom_sum[p])
-                continue
-
-            # .sum missing or incomplete for this atom — read its .int file.
-            int_path = folder + '/' + atom + '.int'
-            lines = read_int_section_fast(
-                int_path,
-                'IQA Energy Components (see "2EDM Note")',
-                '2EDM Note:')
-            if lines is None:
-                missing_files.append(int_path)
-                continue
-            found = {}
-            for line in lines:
-                for p in intra_prop:
-                    if p not in found and intra_patterns[p] in line:
-                        found[p] = float(line.split()[-1])
-                        break
-            if not all(p in found for p in intra_prop):
-                missing_files.append(int_path)
-                continue
             for p in intra_prop:
-                intra_vals[p][atom].append(found[p])
+                # NaN keeps array lengths consistent across folders so the
+                # caller can build uniform numpy arrays even when files are
+                # missing; the caller is responsible for raising on non-empty
+                # missing lists before using the data.
+                intra_vals[p][atom].append(intra_r.get((p, atom), float('nan')))
+        intra_missing_files.extend(intra_miss)
 
-        # ---- inter-atomic ------------------------------------------------
         for (atom1, atom2) in pairs:
             if not inter_prop:
                 continue
-
-            if sum_data is not None and _inter_derivable:
-                cols = sum_data['inter'].get((atom1, atom2))
-                if cols is not None:
-                    for p in inter_prop:
-                        inter_vals[p][(atom1, atom2)].append(_INTER_SUM_DERIVATIONS[p](cols))
-                    continue
-
-            # .sum missing, not derivable, or pair absent — read pair .int file.
-            int_path = folder + '/' + atom1 + '_' + atom2 + '.int'
-            lines = read_int_section_fast(
-                int_path,
-                ' Energy Components (See "2EDM Note"):',
-                '2EDM Note:')
-            if lines is None:
-                missing_files.append(int_path)
-                continue
-            found = {}
-            for line in lines:
+            if all((p, (atom1, atom2)) in inter_r for p in inter_prop):
                 for p in inter_prop:
-                    if p not in found and inter_patterns[p] in line:
-                        found[p] = float(line.split()[-1])
-                        break
-            if not all(p in found for p in inter_prop):
-                missing_files.append(int_path)
-                continue
-            for p in inter_prop:
-                inter_vals[p][(atom1, atom2)].append(found[p])
+                    inter_vals[p][(atom1, atom2)].append(inter_r[(p, (atom1, atom2))])
+            else:
+                for p in inter_prop:
+                    inter_vals[p][(atom1, atom2)].append(None)
+                if (atom1, atom2) in inter_miss_pairs:
+                    inter_missing.append((fi, (atom1, atom2)))
 
-    if missing_files:
-        raise ValueError('The following files are missing or incomplete:\n'
-                         + '\n'.join(missing_files) + '\n')
+    # ---- collect all missing paths (caller decides whether to raise) --------
+    missing_inter_files = [
+        folders[fi] + '/' + pair[0] + '_' + pair[1] + '.int'
+        for fi, pair in inter_missing
+    ]
+    all_missing = intra_missing_files + missing_inter_files
 
     # ---- build output arrays in the same layout as the legacy functions ----
     # Order: prop outer, atom/pair inner; each element is a list of N_folder values.
@@ -814,7 +884,7 @@ def get_iqa_properties(folders, intra_prop, inter_prop, atoms):
             inter_properties.append(inter_vals[p][(atom1, atom2)])
             inter_headers.append(p + '-' + atom1 + '_' + atom2)
 
-    return intra_properties, intra_headers, inter_properties, inter_headers
+    return intra_properties, intra_headers, inter_properties, inter_headers, all_missing
 
 
 def charge_transfer_and_polarisation_from_int_file(folders, atom_list, inter_properties, xyz_files):

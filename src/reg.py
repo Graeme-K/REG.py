@@ -1,8 +1,8 @@
 """
 reg.py v0.0
-L. J. Duarte, XXXXXX, P. L. A. Popelier 
+L. J. Duarte, XXXXXX, P. L. A. Popelier
 
-Library with function to perform the IQA REG analysis. 
+Library with function to perform the IQA REG analysis.
 Check for updates at github.com/ljduarte
 For details about the method, please see XXXXXXX
 
@@ -10,6 +10,55 @@ Please, report bugs and issues to leo.j.duarte@hotmail.com.br
 coded by L. J. Duarte
 """
 
+import numpy as np
+
+
+def _regression_vec(A, terms, mode=None):
+    """Vectorised regression of one reference array A against many terms at once.
+
+    Parameters
+    ----------
+    A     : array-like, shape (n,)  — the reference (e.g. wfn_energy segment)
+    terms : array-like, shape (n_terms, n)  — each row is one IQA contribution
+    mode  : None | "norm" | "std"  — same meaning as in regression()
+
+    Returns
+    -------
+    slopes   : np.ndarray, shape (n_terms,)
+    pearsons : np.ndarray, shape (n_terms,)
+    """
+    A = np.asarray(A, dtype=float)
+    T = np.asarray(terms, dtype=float)   # (n_terms, n_points)
+    n = len(A)
+
+    if mode == "norm":
+        A = A - A.mean()
+        T = T - T.mean(axis=1, keepdims=True)
+    elif mode == "std":
+        std_A = A.std(ddof=1)
+        A = (A - A.mean()) / (std_A if std_A != 0.0 else 1.0)
+        T_mean = T.mean(axis=1, keepdims=True)
+        T_std  = T.std(axis=1, ddof=1, keepdims=True)
+        T_std  = np.where(T_std == 0.0, 1.0, T_std)
+        T = (T - T_mean) / T_std
+
+    sum_A  = A.sum()
+    sum_A2 = (A * A).sum()
+    sum_T  = T.sum(axis=1)           # (n_terms,)
+    sum_T2 = (T * T).sum(axis=1)     # (n_terms,)
+    sum_AT = T @ A                   # (n_terms,)  — one dot product per term
+
+    numerator    = n * sum_AT - sum_A * sum_T
+    denom_slope  = n * sum_A2 - sum_A ** 2
+    denom_pearson = np.sqrt(
+        np.maximum(0.0, n * sum_A2 - sum_A ** 2) *
+        np.maximum(0.0, n * sum_T2 - sum_T ** 2)
+    )
+
+    slopes   = np.where(denom_slope   != 0.0, numerator / denom_slope,   0.0)
+    pearsons = np.where(denom_pearson != 0.0, numerator / denom_pearson, 0.0)
+
+    return slopes, pearsons
 
 
 def regression(A, B, mode=None):
@@ -250,13 +299,11 @@ def reg(wfn_energy, control_coord, terms, critical=True, np=5, inflex=True, crit
         if len(wfn_energy) != len(contribution):  # Checks if all contributions arrays have same size
             raise ValueError("Contributions arrays must have same size")
     
-    #INTERNAL VARIABLES:      
+    #INTERNAL VARIABLES:
     REG_values = []
     pearson_values = []
     split_terms = []  #split_terms[contribution][segment]
     split_wfn = []
-    temp_REG = []
-    temp_pearson = []
 
     #FIND CRITICAL POINTS:
     if critical == True: # Search for critical points automatically
@@ -268,34 +315,22 @@ def reg(wfn_energy, control_coord, terms, critical=True, np=5, inflex=True, crit
 
     #SINGLE SEGMENT REG
     if not critical_points_list and critical == False:
-        for A in terms:
-            if sum(A) == 0:
-                temp_REG.append(0)
-                temp_pearson.append(0)
-            else:
-                temp_REG.append(regression(wfn_energy,A,mode=mode)[0])
-                temp_pearson.append(regression(wfn_energy,A,mode=mode)[2])
-        REG_values.append(temp_REG)
-        pearson_values.append(temp_pearson)
-        temp_REG = []
-        temp_pearson= []
+        slopes, pearsons = _regression_vec(wfn_energy, terms, mode=mode)
+        REG_values.append(slopes.tolist())
+        pearson_values.append(pearsons.tolist())
     else:
     #DIVIDE WFN ENERGY INTO SEGMENTS:
         split_wfn = split_segm(wfn_energy, critical_points_list)
-    
+
     #DIVIDE TERMS INTO SEGMENTS:
         for A in terms:
             split_terms.append(split_segm(A, critical_points_list))
-      
-    #LINEAR REGREESSION FOR CONTRIBUITON INSIDE EACH SEGMENT:
+
+    #LINEAR REGRESSION FOR CONTRIBUTIONS INSIDE EACH SEGMENT:
         for i in range(len(critical_points_list)+1):
-            for A in split_terms:
-                temp_REG.append(regression(split_wfn[i], A[i], mode=mode)[0])
-                temp_pearson.append(regression(split_wfn[i], A[i], mode=mode)[2])
-            REG_values.append(temp_REG)
-            pearson_values.append(temp_pearson)
-            temp_REG = []
-            temp_pearson = []
+            slopes, pearsons = _regression_vec(split_wfn[i], [A[i] for A in split_terms], mode=mode)
+            REG_values.append(slopes.tolist())
+            pearson_values.append(pearsons.tolist())
  
     return REG_values, pearson_values
 
