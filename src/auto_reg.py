@@ -325,7 +325,7 @@ def main():
 
 
     # GET INTRA AND INTER IQA TERMS (single .sum parse per geometry point):
-    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header, missing_files = aim_u.get_iqa_properties(
+    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header = aim_u.get_iqa_properties(
         atomic_files, intra_prop, inter_prop, atoms)
 
     # READ LAGRANGIANS — done before REG so missing-file and |L| problems are
