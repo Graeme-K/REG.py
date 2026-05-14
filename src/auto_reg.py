@@ -325,8 +325,83 @@ def main():
 
 
     # GET INTRA AND INTER IQA TERMS (single .sum parse per geometry point):
-    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header = aim_u.get_iqa_properties(
+    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header, missing_files = aim_u.get_iqa_properties(
         atomic_files, intra_prop, inter_prop, atoms)
+
+    # READ LAGRANGIANS — done before REG so missing-file and |L| problems are
+    # reported together, letting the user identify everything to resubmit at once.
+    lagrangians = aim_u.get_lagrangians(atomic_files, atoms)
+    _L_THRESHOLD_H     = 1e-4
+    _L_THRESHOLD_HEAVY = 1e-3
+    bad_L = []
+    for i, folder_L in enumerate(lagrangians):
+        for atom, L_val in folder_L.items():
+            threshold = _L_THRESHOLD_H if atom.startswith('h') else _L_THRESHOLD_HEAVY
+            if L_val is not None and abs(L_val) > threshold:
+                bad_L.append((reg_folders[i], atom, L_val, threshold))
+
+    # BUILD COMBINED QUALITY REPORT (missing files + Lagrangian check)
+    sep_wide  = '=' * 90
+    sep_inner = '-' * 90
+    q_lines = []
+    q_lines.append(sep_wide)
+    q_lines.append('  MISSING / INCOMPLETE FILE REPORT')
+    q_lines.append(sep_wide)
+    q_lines.append('')
+    if not missing_files:
+        q_lines.append('  All expected files present and readable.')
+    else:
+        q_lines.append('  The following files are missing or incomplete:')
+        for f in missing_files:
+            q_lines.append('    ' + f)
+    q_lines.append('')
+    q_lines.append(sep_wide)
+    q_lines.append('  LAGRANGIAN QUALITY REPORT  (H: |L(A)| < {:.0e}, heavy: |L(A)| < {:.0e})'.format(
+        _L_THRESHOLD_H, _L_THRESHOLD_HEAVY))
+    q_lines.append(sep_wide)
+    q_lines.append('')
+    if not bad_L:
+        q_lines.append('  All atoms within threshold at every geometry point.')
+    else:
+        q_lines.append('  Atoms exceeding threshold (*** = poor integration):')
+        q_lines.append('  {:<25s}  {:>6s}  {:>16s}  {:>10s}'.format('Step', 'Atom', 'L(A)', 'Threshold'))
+        q_lines.append('  ' + '-' * 65)
+        for step_lbl, atom, L_val, threshold in bad_L:
+            q_lines.append('  {:<25s}  {:>6s}  {:>+16.6e}  {:>10.0e}  ***'.format(
+                step_lbl, atom, L_val, threshold))
+    q_lines.append('')
+    q_lines.append(sep_wide)
+    q_lines.append('  ATOMS REQUIRING RESUBMISSION')
+    q_lines.append(sep_wide)
+    q_lines.append('')
+    poor_atoms = sorted(set(atom for _, atom, _, _ in bad_L))
+    if not poor_atoms and not missing_files:
+        q_lines.append('  None.')
+    else:
+        # Unique atoms from bad |L| entries
+        for atom in poor_atoms:
+            q_lines.append('  ' + atom)
+        # Unique atoms inferred from missing file paths (filename stem before '.')
+        missing_atoms = sorted(set(
+            os.path.basename(f).split('.')[0].split('_')[0]
+            for f in missing_files
+        ))
+        for atom in missing_atoms:
+            if atom not in poor_atoms:
+                q_lines.append('  ' + atom)
+    q_lines.append('')
+
+    quality_report_text = '\n'.join(q_lines)
+    print(quality_report_text)
+    quality_report_path = cwd + '/' + SYS + '_results/quality_report.txt'
+    with open(quality_report_path, 'w') as _qf:
+        _qf.write(quality_report_text + '\n')
+
+    if missing_files:
+        raise ValueError(
+            'Missing or incomplete files detected — REG analysis aborted.\n'
+            'Full report written to: ' + quality_report_path)
+
     iqa_intra = np.array(iqa_intra)
     iqa_intra_header = np.array(iqa_intra_header)
     iqa_inter = np.array(iqa_inter)
@@ -416,7 +491,7 @@ def main():
     # the "A'=Mol-A" correction), and avoids the ~3 kJ/mol error that arises from summing
     # individual pair E_IQA_Inter(A,B)/2 values whose sum ("SumB") differs from the
     # corrected per-atom inter contribution ("A'=Mol-A") stored in the .sum file.
-    _iqa_atom_total, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['E_IQA(A)'], [], atoms)
+    _iqa_atom_total, _, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['E_IQA(A)'], [], atoms)
     _iqa_atom_total = np.array(_iqa_atom_total)
     total_energy_iqa = sum(_iqa_atom_total[:len(atoms)])
 
@@ -425,18 +500,7 @@ def main():
     per_step_errors_ha, rmse_kj = reg.integration_error(total_energy_wfn, iqa_for_error)
     per_step_errors_kj = [2625.5 * e for e in per_step_errors_ha]
 
-    # READ LAGRANGIANS
-    lagrangians = aim_u.get_lagrangians(atomic_files, atoms)
-    _L_THRESHOLD = 1e-4
-    bad_L = []  # (step_label, atom, L_value)
-    for i, folder_L in enumerate(lagrangians):
-        for atom, L_val in folder_L.items():
-            if L_val is not None and abs(L_val) > _L_THRESHOLD:
-                bad_L.append((reg_folders[i], atom, L_val))
-
-    # BUILD ERROR REPORT (printed to stdout and written to file)
-    sep_wide  = '=' * 90
-    sep_inner = '-' * 90
+    # BUILD INTEGRATION ERROR REPORT (printed to stdout and written to file)
     lines_out = []
     lines_out.append(sep_wide)
     lines_out.append('  IQA INTEGRATION ERROR REPORT')
@@ -453,19 +517,6 @@ def main():
             per_step_errors_kj[i], flag))
     lines_out.append('  ' + sep_inner)
     lines_out.append('  Recovery error RMSE: {:.4f} kJ/mol'.format(rmse_kj))
-    lines_out.append('')
-    lines_out.append(sep_wide)
-    lines_out.append('  LAGRANGIAN QUALITY REPORT  (threshold: |L(A)| < {:.0e})'.format(_L_THRESHOLD))
-    lines_out.append(sep_wide)
-    lines_out.append('')
-    if not bad_L:
-        lines_out.append('  All atoms within threshold at every geometry point.')
-    else:
-        lines_out.append('  Atoms exceeding threshold (*** = poor integration):')
-        lines_out.append('  {:<25s}  {:>6s}  {:>16s}'.format('Step', 'Atom', 'L(A)'))
-        lines_out.append('  ' + '-' * 52)
-        for step_lbl, atom, L_val in bad_L:
-            lines_out.append('  {:<25s}  {:>6s}  {:>+16.6e}  ***'.format(step_lbl, atom, L_val))
     lines_out.append('')
 
     report_text = '\n'.join(lines_out)
