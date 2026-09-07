@@ -20,6 +20,8 @@ parser.add_option("-d", "--directory", action='store', type='string', dest='reg_
                     help="PLEASE INSERT THE PATH OF REG.py folder installation")
 parser.add_option("-f", "--IQF", action='store', type='string', dest='IQF_TF',
                     help="Select T or F based on if you want to run IQF or not")
+parser.add_option("-z", "--zeros", action='store_true', dest='use_zeros', default=False,
+                    help="Continue REG analysis using zeros for missing or poor-quality atoms instead of aborting")
 
 (option, args) = parser.parse_args()
 
@@ -39,6 +41,7 @@ import os
 import time
 
 import default_settings # type: ignore
+import iqa_diagnostics # type: ignore
 
 def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True,inter_terms=[],inter_prop=[],inp_iqf_intra=[],intra_terms=[],intra_prop=[]):
     """
@@ -135,6 +138,8 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
                         elif (f1_indx != f2_indx) and (atom1 < atom2):
                             F1_ID = f1_indx + 1
                             F2_ID = f2_indx + 1
+                            if F1_ID > F2_ID:
+                                F1_ID, F2_ID = F2_ID, F1_ID
                             iqf_inter[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))] += inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))]
                             iqf_inter_comps[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(inter_terms[int((prop_indx*no_inter)+((atom1-1)*(2*len(atoms)-atom1))/2+(atom2-atom1-1))])
                             iqf_inter_comp_head[int((prop_indx*N_FF_int)+((F1_ID-1)*(2*N_frag-F1_ID))/2+(F2_ID-F1_ID-1))].append(str(atoms[atom1 - 1]) + "-" + str(atoms[atom2 - 1]) + "_" + str(inter_prop[prop_indx]))
@@ -146,6 +151,66 @@ def sum_into_fragments(fragment_names,fragment_atom_list,atoms,int_prop_skp=True
                 iqf_inter_header.append(str(prop) + "_" + str(fragment_names[f1_indx] + "_" + fragment_names[f2_indx]))
 
     return iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head
+
+def compute_entity_totals(entities, iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header,
+                           intra_prop_total, inter_prop_total, prop_sep):
+    """
+    ###########################################################################################################
+    FUNCTION: compute_entity_totals
+              Computes, per atom or fragment, the IQA total energy E_intra(A) + sum_B (1/2 * E_inter(A,B))
+              across all geometry points, for use in the REG_IQA ranking output.
+
+    INPUT: entities, iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header, intra_prop_total,
+           inter_prop_total, prop_sep
+        entities          : list of atom or fragment labels to rank
+        iqa_intra         : intra-atomic/fragment terms as numpy array (rows = TERM, cols = geometry points)
+        iqa_intra_header  : headers matching iqa_intra rows
+        iqa_inter         : inter-atomic/fragment terms as numpy array (rows = TERM, cols = geometry points)
+        iqa_inter_header  : headers matching iqa_inter rows
+        intra_prop_total  : name of the intra-atomic property representing the total (e.g. 'E_IQA_Intra(A)')
+        inter_prop_total  : name of the inter-atomic property representing the total (e.g. 'E_IQA_Inter(A,B)')
+        prop_sep          : separator used between the property name and the entity label(s) in the headers
+                             ('-' for atoms, '_' for fragments)
+
+    OUTPUT: entity_totals
+        entity_totals : numpy array, one row per entity, E_intra(A) + sum_B (1/2 * E_inter(A,B))
+
+    ERROR:
+
+    ###########################################################################################################
+    """
+    intra_index = {h: idx for idx, h in enumerate(iqa_intra_header)}
+    inter_index = {h: idx for idx, h in enumerate(iqa_inter_header)}
+    n_entities = len(entities)
+    n_steps = iqa_intra.shape[1]
+    entity_totals = np.zeros((n_entities, n_steps))
+    for i, ent in enumerate(entities):
+        intra_h = intra_prop_total + prop_sep + str(ent)
+        if intra_h in intra_index:
+            entity_totals[i] = iqa_intra[intra_index[intra_h]].astype(float)
+    for i in range(n_entities):
+        for j in range(i + 1, n_entities):
+            inter_h = inter_prop_total + prop_sep + str(entities[i]) + '_' + str(entities[j])
+            if inter_h in inter_index:
+                pair_val = iqa_inter[inter_index[inter_h]].astype(float)
+                entity_totals[i] += 0.5 * pair_val
+                entity_totals[j] += 0.5 * pair_val
+    return entity_totals
+
+
+def _safe_sheet_name(name, used_names, max_len=31):
+    """Return an Excel-safe sheet name (<= 31 chars, unique within used_names)."""
+    if len(name) <= max_len and name not in used_names:
+        used_names.add(name)
+        return name
+    base = name[:max_len - 3]
+    for idx in range(1, 10000):
+        candidate = base + '~' + str(idx)
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+    raise RuntimeError("Could not generate a unique sheet name for: " + name)
+
 
 def main():
 
@@ -190,6 +255,7 @@ def main():
     DETAILED_ANALYSIS = default_settings.DETAILED_ANALYSIS
     LABELS = default_settings.LABELS  # label figures
     n_terms = default_settings.n_terms  # number of terms to rank in figures and tables
+    ERR_R_THRESHOLD = default_settings.ERR_R_THRESHOLD  # |R| filter for error REG output
 
     ###### REG-IQF
     print(option.IQF_TF)
@@ -325,7 +391,7 @@ def main():
 
 
     # GET INTRA AND INTER IQA TERMS (single .sum parse per geometry point):
-    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header = aim_u.get_iqa_properties(
+    iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header, missing_files = aim_u.get_iqa_properties(
         atomic_files, intra_prop, inter_prop, atoms)
 
     # READ LAGRANGIANS — done before REG so missing-file and |L| problems are
@@ -394,15 +460,62 @@ def main():
     with open(quality_report_path, 'w') as _qf:
         _qf.write(quality_report_text + '\n')
 
+    # ── EXTENDED IQA DIAGNOSTICS ─────────────────────────────────────────────
+    # Run before the missing-file abort so the report is available even when
+    # files need resubmitting.  T(A), q(A) and E_IQA(A) are fetched via the
+    # already-cached .sum parser (no extra NFS I/O).  Missing values become NaN
+    # and are handled gracefully inside iqa_diagnostics.  Any failure here is
+    # non-fatal — a warning is printed and the main REG analysis continues.
+    try:
+        _T_raw,   _, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['T(A)'],     [], atoms)
+        _q_raw,   _, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['q(A)'],     [], atoms)
+        _E_raw,   _, _, _, _ = aim_u.get_iqa_properties(atomic_files, ['E_IQA(A)'], [], atoms)
+        iqa_diagnostics.run(
+            lagrangians=lagrangians,
+            T_vals=np.array(_T_raw),
+            q_vals=np.array(_q_raw),
+            iqa_atom_total=np.array(_E_raw),
+            atoms=atoms,
+            cc=cc,
+            total_energy_wfn=total_energy_wfn,
+            reg_folders=reg_folders,
+            results_dir=cwd + '/' + SYS + '_results',
+        )
+    except Exception as _diag_err:
+        print('WARNING: Extended IQA diagnostics skipped — ' + str(_diag_err))
+    # ─────────────────────────────────────────────────────────────────────────
+
     if missing_files:
-        raise ValueError(
-            'Missing or incomplete files detected — REG analysis aborted.\n'
-            'Full report written to: ' + quality_report_path)
+        if option.use_zeros:
+            print('WARNING: Missing or incomplete files detected — continuing with zeros (--zeros flag active).\n'
+                  'Full report written to: ' + quality_report_path)
+        else:
+            raise ValueError(
+                'Missing or incomplete files detected — REG analysis aborted.\n'
+                'Full report written to: ' + quality_report_path)
 
     iqa_intra = np.array(iqa_intra)
     iqa_intra_header = np.array(iqa_intra_header)
     iqa_inter = np.array(iqa_inter)
     iqa_inter_header = np.array(iqa_inter_header)
+
+    if option.use_zeros:
+        iqa_intra = np.nan_to_num(iqa_intra)
+        iqa_inter = np.nan_to_num(iqa_inter)
+        if bad_L:
+            print('WARNING: Zeroing contributions from atoms with poor Lagrangian integration.')
+            reg_folders_list = list(reg_folders)
+            for step_lbl, atom, _, _, _ in bad_L:
+                if step_lbl not in reg_folders_list:
+                    continue
+                step_idx = reg_folders_list.index(step_lbl)
+                atom_upper = atom.upper()
+                for row_idx, hdr in enumerate(iqa_intra_header):
+                    if atom_upper in hdr.upper():
+                        iqa_intra[row_idx, step_idx] = 0.0
+                for row_idx, hdr in enumerate(iqa_inter_header):
+                    if atom_upper in hdr.upper():
+                        iqa_inter[row_idx, step_idx] = 0.0
 
     if IQF:
         iqf_inter, iqf_inter_header, iqf_inter_comps, iqf_inter_comp_head, iqf_intra, iqf_intra_header, iqf_intra_comps, iqf_intra_comp_head = sum_into_fragments(Frag_names,List_of_frags,atoms,True,iqa_inter,inter_prop,[],iqa_intra,intra_prop)
@@ -410,6 +523,14 @@ def main():
         iqa_intra_header = np.array(iqf_intra_header)
         iqa_inter = iqf_inter
         iqa_inter_header = np.array(iqf_inter_header)
+
+    # PER-ENTITY (ATOM OR FRAGMENT) IQA TOTAL: E_intra(A) + sum_B (1/2 * E_inter(A,B))
+    # Ranked further down against the control coordinate to produce the REG_IQA ranking output.
+    entities = list(Frag_names) if IQF else [str(a) for a in atoms]
+    entity_prop_sep = '_' if IQF else '-'
+    entity_totals = compute_entity_totals(entities, iqa_intra, iqa_intra_header, iqa_inter, iqa_inter_header,
+                                           intra_prop[0], inter_prop[-1], entity_prop_sep)
+    entity_headers = np.array(['E_IQA_Total(' + ent + ')' for ent in entities])
 
     ###############################################################################
     #                                                                             #
@@ -448,13 +569,15 @@ def main():
         iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
         iqa_disp_header = np.array(iqa_disp_header)  # used for reference
         iqa_disp = np.array(iqa_disp)
+        # Total D3 must be captured here — the IQF block below absorbs intra-fragment
+        # pairs into iqf_intra, so summing iqa_disp afterwards gives inter-fragment only.
+        total_energy_dispersion = sum(iqa_disp)
         if IQF:
-            iqa_disp, iqa_disp_header, iqa_disp_comps, iqf_inter_comp_head, iqf_intra, _, iqf_intra_comps, iqf_intra_comp_hea = sum_into_fragments(Frag_names,List_of_frags,atoms,False,iqa_disp,['E_Disp(A,B)'],[iqf_intra,iqf_intra_comps,iqf_intra_comp_head])  #### To remove
+            iqa_disp, iqa_disp_header, iqa_disp_comps, _, iqf_intra, _, iqf_intra_comps, iqf_intra_comp_hea = sum_into_fragments(Frag_names,List_of_frags,atoms,False,iqa_disp,['E_Disp(A,B)'],[iqf_intra,iqf_intra_comps,iqf_intra_comp_head])  #### To remove
             iqa_intra = iqf_intra
         # REG
         reg_disp = reg.reg(total_energy_wfn, cc, iqa_disp, np=POINTS, critical=AUTO, inflex=INFLEX,
                         critical_index=turning_points)
-        total_energy_dispersion = sum(iqa_disp)
 
     if IQF:
         reg_intra = reg.reg(total_energy_wfn, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
@@ -471,16 +594,50 @@ def main():
         reg_inter = reg.reg(total_energy_wfn, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
                             critical_index=turning_points)
 
+    # REG_IQA RANKING: per-atom/fragment E_IQA total against the control coordinate
+    reg_entity_totals = reg.reg(total_energy_wfn, cc, entity_totals, np=POINTS, critical=AUTO, inflex=INFLEX,
+                                critical_index=turning_points)
+
     ### REG breakdown IQF ######
 
     if IQF:
         iqf_intra_comp_list = []
+        iqf_intra_prop_list = []   # REG results for property-grouped sub-totals
+        iqf_intra_prop_heads = []  # group labels per fragment
         for i in range(len(iqa_intra)):
             iqf_val = iqa_intra[i]
             iqf_comp_np = np.array(iqf_intra_comps[i])
             reg_int = reg.reg(iqf_val,cc,iqf_comp_np,np=POINTS, critical=False, inflex=INFLEX,
                             critical_index=critical_points)
             iqf_intra_comp_list.append(reg_int)
+
+            # Group components by property (E_IQA_Intra atomic, VC_IQA, VX_IQA, ...)
+            grouped = {}
+            for comp, head in zip(iqf_intra_comps[i], iqf_intra_comp_head[i]):
+                prop_label = head.split('_', 1)[1] if '_' in head else intra_prop[0]
+                if prop_label not in grouped:
+                    grouped[prop_label] = np.array(comp, dtype=float)
+                else:
+                    grouped[prop_label] = grouped[prop_label] + np.array(comp, dtype=float)
+            grp_labels = list(grouped.keys())
+            grp_terms = np.array(list(grouped.values()))
+            reg_grp = reg.reg(iqf_val, cc, grp_terms, np=POINTS, critical=False,
+                              inflex=INFLEX, critical_index=critical_points)
+            iqf_intra_prop_list.append(reg_grp)
+            iqf_intra_prop_heads.append(grp_labels)
+
+        # Same breakdown for inter-fragment terms: each fragment-pair interaction is
+        # regressed against its constituent atom-pair energies to show which pairs drive it.
+        iqf_inter_comp_list = []
+        for i in range(len(iqf_inter)):
+            inter_comp_np = np.array(iqf_inter_comps[i])
+            if inter_comp_np.ndim == 2 and inter_comp_np.shape[0] > 0:
+                reg_int = reg.reg(iqf_inter[i], cc, inter_comp_np, np=POINTS, critical=False,
+                                  inflex=INFLEX, critical_index=critical_points)
+            else:
+                n_segs = len(critical_points) + 1
+                reg_int = ([[]] * n_segs, [[]] * n_segs)
+            iqf_inter_comp_list.append(reg_int)
 
     # CALCULATE TOTAL ENERGIES
     # Sum the per-atom E_IQA(A) from the .sum file intra table directly.  This is the
@@ -496,6 +653,27 @@ def main():
     iqa_for_error = total_energy_iqa + total_energy_dispersion if DISPERSION else total_energy_iqa
     per_step_errors_ha, rmse_kj = reg.integration_error(total_energy_wfn, iqa_for_error)
     per_step_errors_kj = [2625.5 * e for e in per_step_errors_ha]
+
+    # REG AGAINST RECOVERY ERROR — which IQA terms track E_WFN − E_IQA?
+    # Segments match the total energy surface so error and energy analyses are directly comparable.
+    _err_ha = np.array(per_step_errors_ha)
+    if IQF:
+        reg_intra_err = reg.reg(_err_ha, cc, iqf_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                                critical_index=turning_points)
+        reg_inter_err = reg.reg(_err_ha, cc, iqf_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                                critical_index=turning_points)
+    else:
+        reg_intra_err = reg.reg(_err_ha, cc, iqa_intra, np=POINTS, critical=AUTO, inflex=INFLEX,
+                                critical_index=turning_points)
+        reg_inter_err = reg.reg(_err_ha, cc, iqa_inter, np=POINTS, critical=AUTO, inflex=INFLEX,
+                                critical_index=turning_points)
+
+    # REG of per-atom E_IQA(A) totals against the recovery error.
+    # E_IQA(A) already includes the correct intra + inter correction from the .sum file,
+    # so this ranks atoms by how much their total energy tracks the integration gap.
+    _atom_err_headers = np.array([str(a) for a in atoms])
+    reg_atom_err = reg.reg(_err_ha, cc, _iqa_atom_total[:len(atoms)], np=POINTS, critical=AUTO,
+                           inflex=INFLEX, critical_index=turning_points)
 
     # BUILD INTEGRATION ERROR REPORT (printed to stdout and written to file)
     lines_out = []
@@ -531,9 +709,13 @@ def main():
     dataframe_list = []
 
     if WRITE:
-        # initialise excel file
+        # initialise excel files
         writer = pd.ExcelWriter(path=cwd + '/' + SYS + "_results/REG.xlsx", engine='xlsxwriter')
         energy_writer = pd.ExcelWriter(path=cwd + '/' + SYS + "_results/Energy.xlsx", engine='xlsxwriter')
+        error_writer = pd.ExcelWriter(path=cwd + '/' + SYS + "_results/REG_Error.xlsx", engine='xlsxwriter')
+        if IQF:
+            compare_writer = pd.ExcelWriter(path=cwd + '/' + SYS + "_results/REG_IQA_vs_IQF.xlsx", engine='xlsxwriter')
+        _used_writer_names = set()
         # ENERGY and CONTROL  COORDINATE ONLY FILES
         df_energy_output = pd.DataFrame()
         df_energy_output['WFN'] = total_energy_wfn
@@ -545,9 +727,24 @@ def main():
         df_energy_output.to_csv('total_energy.csv', sep=',')
         df_energy_output.to_excel(energy_writer, sheet_name="total_energies")
 
-        pd.DataFrame(data=np.array(iqa_intra).transpose(), columns=iqa_intra_header).to_excel(energy_writer,
+        # LAGRANGIAN |L(A)| PER ATOM PER STEP
+        L_abs_data = {
+            str(atom): [
+                abs(lagrangians[i].get(atom.lower()))
+                if lagrangians[i].get(atom.lower()) is not None
+                else np.nan
+                for i in range(len(reg_folders))
+            ]
+            for atom in atoms
+        }
+        df_lagrangian_out = pd.DataFrame(L_abs_data, index=cc)
+        df_lagrangian_out.index.name = 'CC'
+        df_lagrangian_out.to_csv('lagrangian_L.csv', sep=',')
+        df_lagrangian_out.to_excel(energy_writer, sheet_name='Lagrangian_L')
+
+        pd.DataFrame(data=np.array(iqa_intra), index=iqa_intra_header, columns=cc).rename_axis('TERM').to_excel(energy_writer,
                                                                                             sheet_name='intra-atomic_energies')
-        pd.DataFrame(data=np.array(iqa_inter).transpose(), columns=iqa_inter_header).to_excel(energy_writer,
+        pd.DataFrame(data=np.array(iqa_inter), index=iqa_inter_header, columns=cc).rename_axis('TERM').to_excel(energy_writer,
                                                                                             sheet_name='inter-atomic_energies')
 
         if IQF:
@@ -555,7 +752,7 @@ def main():
                 for j in range(len(reg_intra_comp[0])):
                     df_iqf_intra = rv.create_term_dataframe(reg_intra_comp, iqf_intra_comp_head[i],j)
                     df_iqf_intra_sorted = df_iqf_intra.sort_values('REG')
-                    df_iqf_intra_sorted.to_excel(writer, sheet_name= iqf_intra_header[i]+ "_seg_" + str(j + 1))
+                    df_iqf_intra_sorted.to_excel(writer, sheet_name=_safe_sheet_name(iqf_intra_header[i] + "_seg_" + str(j + 1), _used_writer_names))
 
 
         # INTER AND INTRA PROPERTIES RE-ARRANGEMENT
@@ -571,7 +768,7 @@ def main():
                 if j <= 1:
                     properties_comparison.append(df_property)
                 df_property.to_csv(inter_prop_names[j] + "_seg_" + str(i + 1) + ".csv", sep=',')
-                df_property.to_excel(writer, sheet_name=inter_prop_names[j] + "_seg_" + str(i + 1))
+                df_property.to_excel(writer, sheet_name=_safe_sheet_name(inter_prop_names[j] + "_seg_" + str(i + 1), _used_writer_names))
                 list_property_sorted.append(
                     pd.concat([df_property[-n_terms:], df_property[:n_terms]], axis=0).sort_values('REG'))
             for j in range(len(intra_prop)):
@@ -579,7 +776,7 @@ def main():
                 if j == 0:
                     properties_comparison.append(df_property)
                 df_property.to_csv(intra_prop_names[j] + "_seg_" + str(i + 1) + ".csv", sep=',')
-                df_property.to_excel(writer, sheet_name=intra_prop_names[j] + "_seg_" + str(i + 1))
+                df_property.to_excel(writer, sheet_name=_safe_sheet_name(intra_prop_names[j] + "_seg_" + str(i + 1), _used_writer_names))
                 list_property_sorted.append(pd.concat([df_property], axis=0).sort_values('REG'))
             list_property_final.append(list_property_sorted)
             final_properties_comparison.append(properties_comparison)
@@ -595,7 +792,7 @@ def main():
                 df_disp_new = rv.filter_term_dataframe(df_disp, disp_name_old, disp_name_new)
                 disp_dic["Seg_" + str(i)] = df_disp_new
                 df_disp_new.to_csv(disp_name_new + "_seg_" + str(i + 1) + ".csv", sep=',')
-                df_disp_new.to_excel(writer, sheet_name=disp_name_new + "_seg_" + str(i + 1))
+                df_disp_new.to_excel(writer, sheet_name=_safe_sheet_name(disp_name_new + "_seg_" + str(i + 1), _used_writer_names))
                 df_disp_new.dropna(axis=0, how='any', subset=None,
                             inplace=True)  # get rid of "NaN" terms which have a null REG Value
                 df_dispersion_sorted = pd.concat([df_dispersion_sorted.reset_index(drop=True),
@@ -605,7 +802,7 @@ def main():
             df_dispersion_sorted.to_csv('REG_' + disp_name_new + '_analysis.csv', sep=',')
             df_dispersion_sorted.to_excel(writer, sheet_name="REG_" + disp_name_new)
             rv.pandas_REG_dataframe_to_table(df_dispersion_sorted, 'REG_' + disp_name_new + '_table', SAVE_FIG=SAVE_FIG)
-            pd.DataFrame(data = np.array(iqa_disp).transpose(), columns=iqa_disp_header).to_excel(energy_writer, sheet_name='dispersion_energies')
+            pd.DataFrame(data=np.array(iqa_disp), index=iqa_disp_header, columns=cc).rename_axis('TERM').to_excel(energy_writer, sheet_name='dispersion_energies')
         # CHARGE-TRANSFER and POLARISATION
         if CHARGE_TRANSFER_POLARISATION:
             df_ct_pl_sorted = pd.DataFrame()
@@ -617,9 +814,9 @@ def main():
                                                 'Vct_IQA(A,B)',
                                                 'Vct')
                 df_pl.to_csv("Vpl_seg_" + str(i + 1) + ".csv", sep=',')
-                df_pl.to_excel(writer, sheet_name="Vpl_seg_" + str(i + 1))
+                df_pl.to_excel(writer, sheet_name=_safe_sheet_name("Vpl_seg_" + str(i + 1), _used_writer_names))
                 df_ct.to_csv("Vct_seg_" + str(i + 1) + ".csv", sep=',')
-                df_ct.to_excel(writer, sheet_name="Vct_seg_" + str(i + 1))
+                df_ct.to_excel(writer, sheet_name=_safe_sheet_name("Vct_seg_" + str(i + 1), _used_writer_names))
                 df_temp = pd.concat([df_pl, df_ct]).sort_values('REG').reset_index(drop=True)
                 df_ct_pl_sorted = pd.concat([df_ct_pl_sorted.reset_index(drop=True),
                                             pd.concat([df_temp[-n_terms:], df_temp[:n_terms]], axis=0).sort_values(
@@ -628,9 +825,9 @@ def main():
             df_ct_pl_sorted.to_excel(writer, sheet_name='REG_Vct-Vpl')
             rv.pandas_REG_dataframe_to_table(df_ct_pl_sorted, 'REG_Vct-Vpl_table', SAVE_FIG=SAVE_FIG)
             pd.DataFrame(
-                data=np.concatenate((np.array(iqa_polarisation_terms), np.array(iqa_charge_transfer_terms))).transpose(),
-                columns=np.concatenate((iqa_polarisation_headers, iqa_charge_transfer_headers))).to_excel(energy_writer,
-                                                                                                        sheet_name='pl_ct_energies')
+                data=np.concatenate((np.array(iqa_polarisation_terms), np.array(iqa_charge_transfer_terms))),
+                index=np.concatenate((iqa_polarisation_headers, iqa_charge_transfer_headers)),
+                columns=cc).rename_axis('TERM').to_excel(energy_writer, sheet_name='pl_ct_energies')
 
         # OUTPUT OF ALL INTER AND INTRA TERMS SELECTED BY THE USER
         all_prop_names = inter_prop_names + intra_prop_names
@@ -639,7 +836,7 @@ def main():
             for j in range(len(reg_inter[0])):
                 df_property_sorted = pd.concat([df_property_sorted, list_property_final[j][i]], axis=1)
             df_property_sorted.to_csv('REG_' + all_prop_names[i] + '_analysis.csv', sep=',')
-            df_property_sorted.to_excel(writer, sheet_name='REG_' + all_prop_names[i])
+            df_property_sorted.to_excel(writer, sheet_name=_safe_sheet_name('REG_' + all_prop_names[i], _used_writer_names))
             rv.pandas_REG_dataframe_to_table(df_property_sorted, 'REG_' + all_prop_names[i] + '_table', SAVE_FIG=SAVE_FIG)
 
         # FINAL COMPARISON
@@ -657,13 +854,127 @@ def main():
                                         pd.concat([df_final[-n_terms:], df_final[:n_terms]], axis=0).sort_values(
                                             'REG').reset_index(drop=True)], axis=1)
             df_final.to_csv('REG_full_comparison_seg_' + str(i + 1) + '.csv', sep=',')
-            df_final.to_excel(writer, sheet_name='REG_full_comparison_seg_' + str(i+1))
+            df_final.to_excel(writer, sheet_name=_safe_sheet_name('REG_full_comparison_seg_' + str(i+1), _used_writer_names))
         df_final_sorted.to_csv('REG_final_analysis.csv', sep=',')
         df_final_sorted.to_excel(writer, sheet_name='REG_final')
         rv.pandas_REG_dataframe_to_table(df_final_sorted, 'REG_final_table', SAVE_FIG=SAVE_FIG)
 
+        # ── REG_IQA RANKING ──────────────────────────────────────────────────
+        # Ranks each atom (or fragment, if IQF) by the REG of its IQA total energy,
+        # E_intra(A) + sum_B (1/2 * E_inter(A,B)), against the control coordinate.
+        df_entity_final_sorted = pd.DataFrame()
+        for i in range(len(reg_entity_totals[0])):
+            df_entity = rv.create_term_dataframe(reg_entity_totals, entity_headers, i)
+            df_entity_sorted = df_entity.sort_values('REG').reset_index(drop=True)
+            df_entity_sorted.to_csv('REG_IQA_ranking_seg_' + str(i + 1) + '.csv', sep=',')
+            df_entity_sorted.to_excel(writer, sheet_name=_safe_sheet_name('REG_IQA_ranking_seg_' + str(i + 1), _used_writer_names))
+            df_entity_final_sorted = pd.concat([df_entity_final_sorted.reset_index(drop=True),
+                                                pd.concat([df_entity_sorted[-n_terms:], df_entity_sorted[:n_terms]], axis=0)
+                                                  .sort_values('REG').reset_index(drop=True)], axis=1)
+        df_entity_final_sorted.to_csv('REG_IQA_ranking_analysis.csv', sep=',')
+        df_entity_final_sorted.to_excel(writer, sheet_name='REG_IQA_ranking')
+        rv.pandas_REG_dataframe_to_table(df_entity_final_sorted, 'REG_IQA_ranking_table', SAVE_FIG=SAVE_FIG)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── RECOVERY ERROR REG OUTPUT ─────────────────────────────────────────
+        # Each IQA term is correlated against E_WFN − E_IQA (the recovery error)
+        # rather than E_WFN itself.  Segments are defined on the error surface.
+        # All output goes to the dedicated REG_Error.xlsx file.
+        df_err_final_sorted = pd.DataFrame()
+        for i in range(len(reg_inter_err[0])):
+            df_err_inter = rv.create_term_dataframe(reg_inter_err, iqa_inter_header, i)
+            df_err_intra = rv.create_term_dataframe(reg_intra_err, iqa_intra_header, i)
+            df_err_inter.to_csv('REG_err_inter_seg_' + str(i + 1) + '.csv', sep=',')
+            df_err_intra.to_csv('REG_err_intra_seg_' + str(i + 1) + '.csv', sep=',')
+            df_err_inter.to_excel(error_writer, sheet_name='REG_err_inter_seg_' + str(i + 1))
+            df_err_intra.to_excel(error_writer, sheet_name='REG_err_intra_seg_' + str(i + 1))
+            df_err_combined = pd.concat([df_err_inter, df_err_intra]).sort_values('REG').reset_index(drop=True)
+            df_err_combined.to_csv('REG_err_full_comparison_seg_' + str(i + 1) + '.csv', sep=',')
+            df_err_combined.to_excel(error_writer, sheet_name='REG_err_full_seg_' + str(i + 1))
+            df_err_filtered = df_err_combined[df_err_combined['R'].abs() >= ERR_R_THRESHOLD].reset_index(drop=True)
+            df_err_filtered.to_excel(error_writer, sheet_name='REG_err_highR_seg_' + str(i + 1))
+            df_err_atom = rv.create_term_dataframe(reg_atom_err, _atom_err_headers, i)
+            df_err_atom_filtered = df_err_atom[df_err_atom['R'].abs() >= ERR_R_THRESHOLD].sort_values('REG').reset_index(drop=True)
+            df_err_atom_filtered.to_excel(error_writer, sheet_name='REG_err_atomE_highR_seg_' + str(i + 1))
+            df_err_final_sorted = pd.concat([
+                df_err_final_sorted.reset_index(drop=True),
+                pd.concat([df_err_combined[-n_terms:], df_err_combined[:n_terms]], axis=0)
+                  .sort_values('REG').reset_index(drop=True)
+            ], axis=1)
+        df_err_final_sorted.to_csv('REG_err_final_analysis.csv', sep=',')
+        df_err_final_sorted.to_excel(error_writer, sheet_name='REG_err_final')
+        rv.pandas_REG_dataframe_to_table(df_err_final_sorted, 'REG_err_final_table', SAVE_FIG=SAVE_FIG)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── IQF INTER-FRAGMENT BREAKDOWN OUTPUT ──────────────────────────────
+        # For each segment, the top n_terms IQF inter-fragment terms (by |REG|)
+        # are broken down to their constituent atom-pair contributions, written to
+        # REG_IQA_vs_IQF.xlsx.  This mirrors the intra breakdown already in REG.xlsx.
+        if IQF:
+            _used_cmp_names = set()
+            n_segs = len(reg_inter[0])
+            n_segs_intra = len(reg_intra[0])
+            for seg_j in range(n_segs):
+                # Summary sheet: all IQF inter terms for this segment ranked by |REG|
+                df_iqf_inter_seg = rv.create_term_dataframe(reg_inter, iqa_inter_header, seg_j)
+                df_iqf_inter_seg_sorted = df_iqf_inter_seg.reindex(
+                    df_iqf_inter_seg['REG'].abs().sort_values(ascending=False).index
+                ).reset_index(drop=True)
+                df_iqf_inter_seg_sorted.to_excel(compare_writer,
+                    sheet_name=_safe_sheet_name('IQF_inter_seg' + str(seg_j + 1), _used_cmp_names))
+
+                # Breakdown sheets for the top n_terms IQF inter terms
+                top_indices = df_iqf_inter_seg_sorted.index[:n_terms]
+                for rank, df_row_idx in enumerate(top_indices):
+                    term_name = df_iqf_inter_seg_sorted.loc[df_row_idx, 'TERM']
+                    # Map term name back to iqf_inter row index
+                    matches = [k for k, h in enumerate(iqa_inter_header) if h == term_name]
+                    if not matches:
+                        continue
+                    inter_idx = matches[0]
+                    comps = iqf_inter_comp_list[inter_idx]
+                    if not comps[0][seg_j]:
+                        continue
+                    df_bkdn = rv.create_term_dataframe(comps, iqf_inter_comp_head[inter_idx], seg_j)
+                    df_bkdn_sorted = df_bkdn.sort_values('REG').reset_index(drop=True)
+                    sheet = _safe_sheet_name(
+                        'bkdn' + str(rank + 1) + '_' + term_name + '_s' + str(seg_j + 1),
+                        _used_cmp_names)
+                    df_bkdn_sorted.to_excel(compare_writer, sheet_name=sheet)
+
+            for seg_j in range(n_segs_intra):
+                df_iqf_intra_seg = rv.create_term_dataframe(reg_intra, iqa_intra_header, seg_j)
+                df_iqf_intra_seg_sorted = df_iqf_intra_seg.reindex(
+                    df_iqf_intra_seg['REG'].abs().sort_values(ascending=False).index
+                ).reset_index(drop=True)
+                df_iqf_intra_seg_sorted.to_excel(compare_writer,
+                    sheet_name=_safe_sheet_name('IQF_intra_seg' + str(seg_j + 1), _used_cmp_names))
+
+                for rank, df_row in df_iqf_intra_seg_sorted.iterrows():
+                    if rank >= n_terms:
+                        break
+                    term_name = df_row['TERM']
+                    matches = [k for k, h in enumerate(iqa_intra_header) if h == term_name]
+                    if not matches:
+                        continue
+                    intra_idx = matches[0]
+                    grp_reg = iqf_intra_prop_list[intra_idx]
+                    grp_heads = iqf_intra_prop_heads[intra_idx]
+                    if not grp_reg[0][seg_j]:
+                        continue
+                    df_grp = rv.create_term_dataframe(grp_reg, grp_heads, seg_j)
+                    df_grp_sorted = df_grp.sort_values('REG').reset_index(drop=True)
+                    sheet = _safe_sheet_name(
+                        'intra' + str(rank + 1) + '_' + term_name + '_s' + str(seg_j + 1),
+                        _used_cmp_names)
+                    df_grp_sorted.to_excel(compare_writer, sheet_name=sheet)
+
+            compare_writer.close()
+        # ─────────────────────────────────────────────────────────────────────
+
         writer.close()
         energy_writer.close()
+        error_writer.close()
         #rv.plot_violin([dataframe_list[i]['R'] for i in range(len(reg_inter[0]))], save=SAVE_FIG,
                     #file_name='violin.png')  # Violing plot of R vs Segments
 
@@ -682,6 +993,15 @@ def main():
                     label=LABELS,
                     y_label=r'Relative Energy [$kJ.mol^{-1}$]', x_label=X_LABEL, title=SYS,
                     save=SAVE_FIG, file_name='REG_analysis.png')
+
+    _err_kj = np.array(per_step_errors_kj)
+    rv.plot_segment(cc, _err_kj - _err_kj.mean(), critical_points,
+                    annotate=ANNOTATE,
+                    label=LABELS,
+                    y_label=r'$E_\mathrm{WFN} - E_\mathrm{IQA}$ [$kJ.mol^{-1}$]',
+                    x_label=X_LABEL,
+                    title=SYS + ' — Recovery Error',
+                    save=SAVE_FIG, file_name='REG_err_analysis.png')
 
     if DETAILED_ANALYSIS:
         for i in range(len(reg_inter[0])):

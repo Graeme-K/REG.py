@@ -664,10 +664,13 @@ def get_lagrangians(folders, atoms):
                 folder_L[atom] = atom_sum['L(A)']
                 continue
             # Fall back to the .int file basin integration section.
+            # Large molecules have long integration result sections; 64 KB tail
+            # is enough to find the section without a full NFS read.
             lines = read_int_section_fast(
                 folder + '/' + atom + '.int',
                 'Results of the basin integration:',
-                '|Dipole|')
+                '|Dipole|',
+                max_bytes=65536)
             L_val = None
             if lines is not None:
                 for line in lines:
