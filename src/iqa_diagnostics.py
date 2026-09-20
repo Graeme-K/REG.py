@@ -25,7 +25,8 @@ def run(lagrangians, T_vals, q_vals,
         iqa_atom_total, atoms, cc,
         total_energy_wfn, reg_folders,
         results_dir, save_fig=True,
-        n_flagged=5, expected_charge=0.0):
+        n_flagged=5, expected_charge=0.0,
+        direct_multipoles=None):
     """Run all three extended diagnostics and write outputs to *results_dir*.
 
     Parameters
@@ -57,6 +58,12 @@ def run(lagrangians, T_vals, q_vals,
     _electron_count_report(
         q_vals, atoms, cc, reg_folders,
         expected_charge, n_steps, results_dir)
+
+    _direct_multipole_report(
+        q_vals, direct_multipoles,
+        cc, reg_folders, results_dir, save_fig,
+        atoms=atoms, iqa_atom_total=iqa_atom_total,
+        total_energy_wfn=total_energy_wfn)
 
     _delta_E_plot(
         iqa_atom_total, atoms, cc,
@@ -195,7 +202,191 @@ def _electron_count_report(q_vals, atoms, cc, reg_folders,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3.  Per-atom ΔE_IQA(A) plot
+# 3.  Direct charge / dipole / quadrupole visualization
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _aggregate_component(component_data):
+    data = np.asarray(component_data, dtype=float)
+    if data.size == 0:
+        return np.array([], dtype=float)
+    if data.ndim == 1:
+        data = data[np.newaxis, :]
+    return np.nansum(data, axis=0)
+
+
+def _direct_multipole_report(q_vals, direct_multipoles, cc, reg_folders,
+                             results_dir, save_fig, atoms=None,
+                             iqa_atom_total=None, total_energy_wfn=None):
+    if q_vals is None and direct_multipoles is None:
+        return
+
+    n_steps = len(reg_folders)
+
+    q_vals_arr = np.asarray(q_vals, dtype=float) if q_vals is not None else None
+    if q_vals_arr is not None and q_vals_arr.ndim == 1:
+        q_vals_arr = q_vals_arr[np.newaxis, :]
+
+    charge_sum = np.nansum(q_vals_arr, axis=0) if q_vals_arr is not None else np.zeros(n_steps)
+
+    if direct_multipoles:
+        dipole = {
+            'x': _aggregate_component(direct_multipoles.get('mu_x')),
+            'y': _aggregate_component(direct_multipoles.get('mu_y')),
+            'z': _aggregate_component(direct_multipoles.get('mu_z')),
+        }
+        dipole_mag = np.linalg.norm(
+            np.stack([dipole.get('x', np.zeros(n_steps)),
+                      dipole.get('y', np.zeros(n_steps)),
+                      dipole.get('z', np.zeros(n_steps))], axis=1),
+            axis=1,
+        ) if any(v.size for v in dipole.values()) else np.zeros(n_steps)
+
+        quadrupole = {
+            'Qxx': _aggregate_component(direct_multipoles.get('q_xx')),
+            'Qxy': _aggregate_component(direct_multipoles.get('q_xy')),
+            'Qxz': _aggregate_component(direct_multipoles.get('q_xz')),
+            'Qyy': _aggregate_component(direct_multipoles.get('q_yy')),
+            'Qyz': _aggregate_component(direct_multipoles.get('q_yz')),
+            'Qzz': _aggregate_component(direct_multipoles.get('q_zz')),
+        }
+    else:
+        dipole = {'x': np.zeros(n_steps), 'y': np.zeros(n_steps), 'z': np.zeros(n_steps)}
+        dipole_mag = np.zeros(n_steps)
+        quadrupole = {
+            'Qxx': np.zeros(n_steps), 'Qxy': np.zeros(n_steps), 'Qxz': np.zeros(n_steps),
+            'Qyy': np.zeros(n_steps), 'Qyz': np.zeros(n_steps), 'Qzz': np.zeros(n_steps)
+        }
+
+    sep = '=' * 90
+    lines = [
+        sep,
+        '  EXTENDED IQA DIAGNOSTICS — DIRECT CHARGE / DIPOLE / QUADRUPOLE ANALYSIS',
+        sep,
+        '',
+        '  Per-step molecular quantities reconstructed directly from AIMAll .sum tables.',
+        '  Charge: Σ q(A)    Dipole: Σ Mu_X(A), Σ Mu_Y(A), Σ Mu_Z(A)    '
+        'Quadrupole: Σ Q_XX(A), ...\n',
+        '  {:<25s}  {:>10s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}  {:>12s}'.format(
+            'Step', 'CC', 'Σq(A)', 'μx', 'μy', 'μz', '|μ|', 'Qxx', 'Qxy', 'Qxz', 'Qyy', 'Qyz', 'Qzz'),
+        '  ' + '-' * 145,
+    ]
+
+    for si in range(n_steps):
+        lines.append(
+            '  {:<25s}  {:>10.4f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}  {:>12.6f}'.format(
+                reg_folders[si], float(cc[si]),
+                charge_sum[si],
+                dipole.get('x', np.zeros(n_steps))[si],
+                dipole.get('y', np.zeros(n_steps))[si],
+                dipole.get('z', np.zeros(n_steps))[si],
+                dipole_mag[si],
+                quadrupole.get('Qxx', np.zeros(n_steps))[si],
+                quadrupole.get('Qxy', np.zeros(n_steps))[si],
+                quadrupole.get('Qxz', np.zeros(n_steps))[si],
+                quadrupole.get('Qyy', np.zeros(n_steps))[si],
+                quadrupole.get('Qyz', np.zeros(n_steps))[si],
+                quadrupole.get('Qzz', np.zeros(n_steps))[si],
+            )
+        )
+
+    lines.append('')
+
+    if q_vals_arr is not None and atoms is not None:
+        lines.append('  PER-STEP PER-ATOM CHARGE DISTRIBUTION [e]')
+        lines.append('  ' + '-' * 90)
+        header = '  {:<25s}  {:>10s}'.format('Step', 'CC')
+        header += ''.join('  {:>12s}'.format(atom.upper()) for atom in atoms)
+        lines.append(header)
+        lines.append('  ' + '-' * len(header))
+        for si in range(n_steps):
+            row = '  {:<25s}  {:>10.4f}'.format(reg_folders[si], float(cc[si]))
+            for ai in range(q_vals_arr.shape[0]):
+                val = q_vals_arr[ai, si]
+                if np.isnan(val):
+                    row += '  {:>12s}'.format('N/A')
+                else:
+                    row += '  {:>12.6f}'.format(val)
+            lines.append(row)
+        lines.append('')
+
+    if iqa_atom_total is not None or total_energy_wfn is not None:
+        lines.append('  PER-STEP ENERGY SUMMARY')
+        lines.append('  ' + '-' * 90)
+        lines.append('  {:<25s}  {:>10s}  {:>14s}  {:>14s}  {:>14s}  {:>14s}'.format(
+            'Step', 'CC', 'E_WFN', 'ΣE_IQA(A)', 'ΔE_WFN', 'ΔE_IQA'))
+        lines.append('  ' + '-' * 90)
+
+        wfn_energy = np.asarray(total_energy_wfn, dtype=float) if total_energy_wfn is not None else np.full(n_steps, np.nan)
+        iqa_energy_sum = np.nansum(np.asarray(iqa_atom_total, dtype=float), axis=0) if iqa_atom_total is not None else np.full(n_steps, np.nan)
+
+        ref_iqa = iqa_energy_sum[0] if np.isfinite(iqa_energy_sum[0]) else np.nan
+        ref_wfn = wfn_energy[0] if np.isfinite(wfn_energy[0]) else np.nan
+        for si in range(n_steps):
+            dE_wfn = wfn_energy[si] - ref_wfn if np.isfinite(wfn_energy[si]) and np.isfinite(ref_wfn) else np.nan
+            dE_iqa = iqa_energy_sum[si] - ref_iqa if np.isfinite(iqa_energy_sum[si]) and np.isfinite(ref_iqa) else np.nan
+            lines.append(
+                '  {:<25s}  {:>10.4f}  {:>14.6f}  {:>14.6f}  {:>14.6f}  {:>14.6f}'.format(
+                    reg_folders[si], float(cc[si]),
+                    wfn_energy[si],
+                    iqa_energy_sum[si],
+                    dE_wfn,
+                    dE_iqa,
+                )
+            )
+        lines.append('')
+
+    text = '\n'.join(lines)
+    print(text)
+    out_path = os.path.join(results_dir, 'diagnostics_multipoles.txt')
+    with open(out_path, 'w') as f:
+        f.write(text + '\n')
+
+    if save_fig:
+        fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
+
+        ax = axes[0]
+        if q_vals_arr is not None and atoms is not None:
+            for ai, atom in enumerate(atoms):
+                ax.plot(cc, q_vals_arr[ai], label=atom.upper(), linewidth=1.0, alpha=0.45)
+            ax.plot(cc, charge_sum, 'k-', linewidth=2.0, label='Σ q(A)')
+        else:
+            ax.plot(cc, charge_sum, 'k-o', linewidth=1.8)
+        ax.axhline(0.0, color='gray', linewidth=0.5)
+        ax.set_ylabel('q(A) [e]')
+        ax.set_title('Direct charge / dipole / quadrupole diagnostics')
+        if q_vals_arr is not None and atoms is not None:
+            ax.legend(loc='best', fontsize=8, ncol=min(4, max(1, len(atoms))))
+
+        ax = axes[1]
+        ax.plot(cc, dipole.get('x', np.zeros_like(charge_sum)), label='μx', linewidth=1.8)
+        ax.plot(cc, dipole.get('y', np.zeros_like(charge_sum)), label='μy', linewidth=1.8)
+        ax.plot(cc, dipole.get('z', np.zeros_like(charge_sum)), label='μz', linewidth=1.8)
+        ax.plot(cc, dipole_mag, 'k--', linewidth=2.0, label='|μ|')
+        ax.axhline(0.0, color='gray', linewidth=0.5)
+        ax.set_ylabel('Dipole components')
+        ax.legend(loc='best', fontsize=8)
+
+        ax = axes[2]
+        quad_keys = ['Qxx', 'Qxy', 'Qxz', 'Qyy', 'Qyz', 'Qzz']
+        styles = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5']
+        for key, style in zip(quad_keys, styles):
+            ax.plot(cc, quadrupole.get(key, np.zeros_like(charge_sum)), label=key, color=style, linewidth=1.8)
+        ax.axhline(0.0, color='gray', linewidth=0.5)
+        ax.set_ylabel('Quadrupole tensor')
+        ax.set_xlabel('Control Coordinate')
+        ax.legend(loc='best', fontsize=8, ncol=3)
+
+        fig.tight_layout()
+
+        out_path = os.path.join(results_dir, 'diagnostics_multipoles.png')
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+        print('  Direct multipole plot saved to: ' + out_path)
+        plt.close(fig)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4.  Per-atom ΔE_IQA(A) plot
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _delta_E_plot(iqa_atom_total, atoms, cc,

@@ -171,14 +171,96 @@ def plot_segment(coordinate, wfn_energy, critical_points, label=False, color=Tru
 
     return
     
+# Rungs used to auto-calibrate the significance threshold, as fractions of the
+# largest |REG| in the table.  Walked coarse to fine, so a system whose leading
+# terms are tightly bunched stops high up and a spread-out one walks further down.
+REG_FRACTION_LADDER = (1/2, 1/3, 1/4, 1/5, 1/8, 1/10, 1/15, 1/20, 1/30, 1/50, 1/100)
+
+
+def select_significant_terms(dataframe, min_rows=10, max_rows=25, r_threshold=0.0,
+                             degeneracy_tol=0.02):
+    """Return the significant terms of a REG table, with the cut chosen automatically.
+
+    This replaces the older "top n_terms positive plus top n_terms negative"
+    selection.  A single magnitude threshold is applied to both signs, so the
+    positive/negative split is whatever the physics gives — a segment driven by two
+    negative terms and eight positive ones is reported that way instead of being
+    padded to 4 and 4.
+
+    The threshold is a fraction of the largest |REG| in this table, which makes it
+    scale-free: it does not care whether the leading term is 16 kJ/mol or 0.5.  The
+    fraction is not fixed, because a fixed one (max/10, say) gives a handful of rows
+    on one system and hundreds on the next.  Instead REG_FRACTION_LADDER is walked
+    from coarse to fine and the first rung that admits at least `min_rows` terms is
+    taken.  If that rung overshoots `max_rows` — a table with no real separation,
+    such as dispersion, where everything sits within a factor of two of the top — the
+    ladder is abandoned and the table is truncated by rank at `max_rows` instead.
+
+    Either way the cut is then extended downwards through any terms within
+    `degeneracy_tol` of the last one kept, so near-degenerate contributions are not
+    split by an arbitrary boundary.
+
+    `r_threshold` is a weak sanity guard, not the decider: it removes terms whose
+    correlation with the control coordinate is so poor that their REG value is
+    meaningless.  On a well-behaved segment almost every term has |R| > 0.95, so it
+    normally removes nothing.  Set it to 0 to disable.
+
+    The chosen threshold and fraction are recorded on the returned frame's ``attrs``
+    (``reg_threshold``, ``reg_fraction``) so they can be quoted in a caption.
+    """
+    col = ['TERM', 'REG', 'R'] if 'TERM' in dataframe.columns else list(dataframe.columns)
+    df = dataframe.loc[:, col].dropna(axis=0, how='any', subset=['REG', 'R'])
+    if r_threshold:
+        df = df[df['R'].abs() >= r_threshold]
+    df = df[df['REG'].abs() > 0]
+    if len(df) == 0:
+        empty = df.reset_index(drop=True)
+        empty.attrs['reg_threshold'], empty.attrs['reg_fraction'] = None, None
+        return empty
+
+    df = df.reindex(df['REG'].abs().sort_values(ascending=False).index)
+    magnitude = df['REG'].abs().values
+    largest = magnitude[0]
+
+    fraction, n_keep = None, None
+    for f in REG_FRACTION_LADDER:
+        count = int((magnitude >= f * largest).sum())
+        if count >= min_rows:
+            fraction, n_keep = f, count
+            break
+    if n_keep is None:  # even the finest rung stays under min_rows — keep what there is
+        fraction = REG_FRACTION_LADDER[-1]
+        n_keep = max(int((magnitude >= fraction * largest).sum()), min(min_rows, len(df)))
+    if n_keep > max_rows:  # no separation to find; fall back to a plain rank cut
+        fraction, n_keep = None, max_rows
+    else:
+        # Do not split near-degenerate terms across the boundary.  Only worth doing
+        # when the ladder found a real cut: in the rank-cut fallback the values form
+        # a continuum and this would walk on indefinitely, so max_rows stays a cap.
+        while (n_keep < len(magnitude) and n_keep < max_rows
+               and magnitude[n_keep] >= magnitude[n_keep - 1] * (1 - degeneracy_tol)):
+            n_keep += 1
+
+    out = df.iloc[:n_keep].sort_values('REG').reset_index(drop=True)
+    out.attrs['reg_threshold'] = float(magnitude[n_keep - 1])
+    out.attrs['reg_fraction'] = fraction
+    return out
+
+
 def pandas_REG_dataframe_to_table(dataframe, table_name, SAVE_FIG=True):
     if SAVE_FIG==True:
+        if len(dataframe) == 0 or len(dataframe.columns) == 0:
+            return  # nothing passed the significance filter — no table to draw
         dataframe['R'] = np.round(dataframe['R'], decimals=3)
         dataframe['REG'] = np.round(dataframe['REG'], decimals=2)
+        # segments no longer contribute an equal number of rows, so the shorter
+        # ones are padded with NaN by the side-by-side concatenation; blank those
+        # cells rather than printing "nan" in the table.
+        cell_text = dataframe.astype(object).where(dataframe.notna(), '').values
         fig, ax = plt.subplots()
         ax.axis('off')
         ax.axis('tight')
-        t= ax.table(cellText=dataframe.values, colWidths = [0.4]*len(dataframe.columns),  colLabels=dataframe.columns,  cellLoc='center',loc='center')
+        t= ax.table(cellText=cell_text, colWidths = [0.4]*len(dataframe.columns),  colLabels=dataframe.columns,  cellLoc='center',loc='center')
         t.auto_set_font_size(False)
         t.set_fontsize(12)
         fig.savefig(table_name, dpi=300, bbox_inches="tight")
@@ -196,7 +278,14 @@ def filter_term_dataframe(prop_dataframe, original_prop_name, new_prop_name):
     mask = prop_dataframe['TERM'].str.contains(original_prop_name, regex=False)
     new_df = prop_dataframe.loc[mask, col].copy()
     new_df = new_df.sort_values('REG').reset_index(drop=True)
-    new_df['TERM'] = new_df['TERM'].str.replace(original_prop_name + '-', new_prop_name + '(')
-    new_df['TERM'] = new_df['TERM'].str.replace('_', ',')
-    new_df['TERM'] = new_df['TERM'] + ')'
+
+    def format_term(term):
+        label = term
+        if term.startswith(original_prop_name + '-'):
+            label = term[len(original_prop_name) + 1:]
+        elif term.startswith(original_prop_name + '_'):
+            label = term[len(original_prop_name) + 1:]
+        return f"{new_prop_name}({label.replace('_', ',')})"
+
+    new_df['TERM'] = new_df['TERM'].map(format_term)
     return new_df

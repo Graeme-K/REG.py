@@ -636,6 +636,46 @@ def inter_property_from_int_file(folders, prop, atom_list):
     return inter_properties, contributions_list, missing_files
 
 
+def get_sum_intra_properties(folders, props, atoms):
+    """Read per-atom properties straight from the cached .sum data.
+
+    Unlike :func:`get_iqa_properties` this never falls back to individual .int
+    files, so it costs nothing once the .sum files have been parsed (they are
+    cached whole, with every per-atom column the file contains).  Properties
+    absent from the .sum tables come back as NaN instead of triggering one NFS
+    read per atom per geometry point, which is what makes it safe to harvest
+    optional extras such as the multipole moments on every run.
+
+    Parameters
+    ----------
+    folders : list of _atomicfiles folder paths, one per geometry point.
+    props   : list of per-atom column names, e.g. ['Mu_X(A)', 'Q_XX(A)'].
+    atoms   : list of atom labels, e.g. ['c1', 'h2', ...].
+
+    Returns
+    -------
+    dict : {prop: [[value per folder] per atom]} — outer list follows *atoms*.
+           None is returned for a property that is absent everywhere, so the
+           caller can tell "not available" from "available and zero".
+    """
+    result = {p: [[] for _ in atoms] for p in props}
+    seen = {p: False for p in props}
+
+    for folder in folders:
+        sum_data = _parse_sum_file(_get_sum_path(folder), atoms)   # free — cached
+        for a_i, atom in enumerate(atoms):
+            atom_sum = (sum_data or {}).get('intra', {}).get(atom, {})
+            for p in props:
+                val = atom_sum.get(p)
+                if val is None:
+                    result[p][a_i].append(float('nan'))
+                else:
+                    result[p][a_i].append(val)
+                    seen[p] = True
+
+    return {p: (result[p] if seen[p] else None) for p in props}
+
+
 def get_lagrangians(folders, atoms):
     """Read the Lagrangian L(A) for every atom at every geometry point.
 

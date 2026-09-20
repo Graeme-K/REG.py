@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "regpy"
+version = "0.1.0"
+description = "REG.py package for Relative Energy Gradient analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+  { name = "F. Falcioni, P. L. A. Popelier" }
+]
+dependencies = [
+  "numpy>=1.20",
+  "pandas>=1.5",
+  "matplotlib>=3.5",
+  "scipy>=1.8",
+  "xlsxwriter>=3.0"
+]
+
+[project.scripts]
+reg-auto = "auto_reg:main"
+reg-multi = "reg_multipole:main"
+reg-rdp = "setup_rdp:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "aimall_utils",
+  "auto_reg",
+  "default_settings",
+  "dftd3_utils",
+  "gaussian_utils",
+  "iqa_diagnostics",
+  "morphy_utils",
+  "multipole_utils",
+  "reg",
+  "reg_analysis_gui",
+  "reg_multipole",
+  "reg_setup",
+  "reg_vis",
+  "setup_rdp"
+]
