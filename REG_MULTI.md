@@ -522,6 +522,29 @@ quadrupole as a traceless `3x3` tensor, in place of (or beside) `Q[1,k]` and
 `Q[2,k]`. That is a reporting convenience, worth adding if fragment moments are
 being quoted in a paper; it is not a change to the method.
 
+## Validation
+
+What the implementation has been checked against, in order of how much it proves:
+
+| check | result |
+|---|---|
+| interaction tensor vs closed-form charge–charge, charge–dipole, dipole–dipole | exact to 1e-17 |
+| full series vs the exact Coulomb energy of two point-charge clusters, through `l_tot = 10`, with solid harmonics built independently | 5e-3 kJ/mol at 6 Å |
+| moment translation vs group moments computed directly from the charge clouds | 5e-14 |
+| admission gates vs a synthetic path where `R_AB > rho_A + rho_B` is known atom by atom | every verdict correct, including a pair that converges at one end of the path and fails at the other |
+| **fragment-centred series vs exact IQA `V_cl`, real AIMAll data** (benzene + F⁻, 11 geometries, 21 fragment pairs) | residuals 0.001–0.021 kJ/mol |
+| **whole pipeline vs the original prototype's published energies** (adenine + F⁻, `L_max = 3`, ungated) | exact `V_cl` to 4e-7 kJ/mol, multipole sum to 4e-6 kJ/mol |
+
+The benzene + F⁻ run is also a check on the gating itself. The `C(pi)|Ion`
+fragment pair *passes* the geometric gate — the centres clear the summed
+β-sphere extents by 0.34 Å — and is then rejected by the convergence test with a
+15.9 kJ/mol residual, while the `H|Ion` pairs at a similar separation are
+admitted at 0.02 kJ/mol. That is the β-sphere lower bound behaving exactly as
+documented: necessary, not sufficient, and no substitute for the numerical test.
+
+`python3 tests/test_multipole.py` runs the first four of these (93 checks) with
+no external data. The last two need the datasets they name.
+
 ## Limitations
 
 * **1,2 and 1,3 pairs stay out.** Bringing them back needs the MMS shift, which
