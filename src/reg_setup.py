@@ -164,18 +164,34 @@ def discover_reg_points(root='.'):
     reg_folder_list = []
     wfx = False
 
+    # A geometry point is a folder holding a wavefunction, and its Gaussian output
+    # is the one in that same folder.  Pairing them folder by folder rather than
+    # collecting two flat lists and zipping them matters: a stray .log anywhere in
+    # the tree — the reg.log of a previous run, a batch log — used to join the
+    # second list and shift every wavefunction onto the wrong output, which is
+    # silent and gives wrong energies rather than an error.
     for walk_root, _, files in os.walk(root):
-        for name in files:
-            if name.endswith('.wfn') or name.endswith('.wfx'):
-                wf_file.append(os.path.join(walk_root, name))
-                reg_folders.append(walk_root.split('/')[-1])
-                reg_folder_list.append(walk_root)
-                if name.endswith('.wfx'):
-                    wfx = True
-            elif ((name.endswith('.out') or name.endswith('.log')
-                   or name.endswith('.gaussianoutput'))
-                  and not (name.startswith('dft-d3') or name.startswith('slurm'))):
-                g16_file.append(os.path.join(walk_root, name))
+        wf_names = sorted(name for name in files
+                          if name.endswith('.wfn') or name.endswith('.wfx'))
+        if not wf_names:
+            continue
+        g16_names = sorted(name for name in files
+                           if (name.endswith('.out') or name.endswith('.log')
+                               or name.endswith('.gaussianoutput'))
+                           and not (name.startswith('dft-d3') or name.startswith('slurm')))
+        if not g16_names:
+            raise FileNotFoundError(
+                'No Gaussian output found in ' + walk_root + ', which holds '
+                + wf_names[0] + '. Each geometry point needs its single point '
+                'output (.out/.log) beside its wavefunction')
+        for wf_index, wf_name in enumerate(wf_names):
+            wf_file.append(os.path.join(walk_root, wf_name))
+            reg_folders.append(os.path.basename(os.path.normpath(walk_root)))
+            reg_folder_list.append(walk_root)
+            g16_file.append(os.path.join(
+                walk_root, g16_names[wf_index] if wf_index < len(g16_names) else g16_names[0]))
+            if wf_name.endswith('.wfx'):
+                wfx = True
 
     ordered = sorted(zip(reg_folders, reg_folder_list, wf_file, g16_file),
                      key=lambda entry: folder_value(entry[0]))
@@ -235,3 +251,196 @@ def load_xyz_structure(path):
         })
 
     return {'path': path, 'n_atoms': n_atoms, 'atoms': atoms}
+
+
+# ---------------------------------------------------------------------------
+# Output naming
+# ---------------------------------------------------------------------------
+# A batch run analyses many systems that all produce the same file names, so
+# every name a run creates is put behind the system's own token.  The whole
+# results tree of a folder of systems can then be collected into one place —
+# or opened side by side in the explorer — without CLOBEN's REG.xlsx and
+# CLOPY's REG.xlsx being the same file name.
+
+_PREFIX_UNSAFE = re.compile(r'[^A-Za-z0-9._-]+')
+
+
+def sanitise_prefix(name):
+    """Turn a system or folder name into a token safe to put in front of a file name.
+
+    Anything that is not alphanumeric, dot, dash or underscore becomes '_', and
+    leading/trailing separators are dropped, so 'Cl-pi run 2' gives 'Cl-pi_run_2'.
+    Returns '' for a name with nothing usable in it, which every caller reads as
+    "do not prefix".
+    """
+    if not name:
+        return ''
+    return _PREFIX_UNSAFE.sub('_', str(name).strip()).strip('_.')
+
+
+def prefixed(name, prefix):
+    """'<prefix>_<name>', leaving a name that already carries the prefix alone.
+
+    Idempotent on purpose: the results directory and the transfer bundle are
+    named with the prefix as they are created, and the sweep over the finished
+    directory must not turn them into CLOBEN_CLOBEN_....
+    """
+    if not prefix or not name:
+        return name
+    if name == prefix or name.startswith(prefix + '_'):
+        return name
+    return prefix + '_' + name
+
+
+def apply_output_prefix(directory, prefix, verbose=False):
+    """Put *prefix* in front of every entry of a finished results directory.
+
+    Renaming afterwards rather than threading the prefix through each of the
+    forty-odd writes keeps the two in step by construction: a file added to the
+    analysis later is prefixed without anyone remembering to do it.  It is safe
+    because nothing in a REG run reads back what it wrote — the directory is
+    output only.
+
+    A rename that fails (an open handle, a read-only filesystem) is reported and
+    skipped: a naming convenience must not cost a completed analysis.  Returns
+    the list of (old_name, new_name) pairs actually renamed.
+    """
+    if not prefix or not directory or not os.path.isdir(directory):
+        return []
+
+    renamed = []
+    for name in sorted(os.listdir(directory)):
+        new_name = prefixed(name, prefix)
+        if new_name == name:
+            continue
+        try:
+            os.replace(os.path.join(directory, name), os.path.join(directory, new_name))
+        except OSError as rename_error:
+            print('WARNING: could not rename {a} to {b} — {e}'.format(
+                a=name, b=new_name, e=rename_error))
+            continue
+        renamed.append((name, new_name))
+
+    if verbose and renamed:
+        print('  {n} file(s) in {d} renamed to start with "{p}_"'.format(
+            n=len(renamed), d=os.path.basename(directory), p=prefix))
+    return renamed
+
+
+# ---------------------------------------------------------------------------
+# Finding the systems in a folder of systems
+# ---------------------------------------------------------------------------
+
+CONFIG_NAME = 'auto_reg.config'
+
+# Directories that are part of a system rather than a system of their own.
+_SKIP_DIR_SUFFIXES = ('_atomicfiles', '_results')
+# 'reg_batch_logs' and 'REG_sweep_collection' are what a sweep itself leaves at
+# the root it was run from; neither holds a system.
+_SKIP_DIR_NAMES = {'__pycache__', '.git', 'reg_batch_logs', 'REG_sweep_collection'}
+
+# Names that say what the folder holds rather than which system it belongs to.
+# A system root found under one of these takes its name from the folder above,
+# so a tree of CLOBEN/REG-IQA/1..11 is called CLOBEN and not REG-IQA.
+_GENERIC_DIR_NAME = re.compile(
+    r'^(reg([-_ ]?iqa|[-_ ]?iqf|[-_ ]?multi)?|steps?|points?|geom(etries|etry)?|'
+    r'structures?|scan|irc|calc(ulations?)?|run|runs|data)$', re.IGNORECASE)
+
+
+def _is_skipped_dir(name):
+    return (name.startswith('.') or name in _SKIP_DIR_NAMES
+            or name.endswith(_SKIP_DIR_SUFFIXES))
+
+
+def _holds_wavefunction(path):
+    """True when the directory holds a .wfn/.wfx directly, i.e. it is a geometry point."""
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if entry.is_file() and (entry.name.endswith('.wfn') or entry.name.endswith('.wfx')):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _child_dirs(path):
+    try:
+        with os.scandir(path) as entries:
+            return sorted(entry.name for entry in entries
+                          if entry.is_dir() and not _is_skipped_dir(entry.name))
+    except OSError:
+        return []
+
+
+def _count_step_folders(path):
+    """Geometry points directly inside *path*."""
+    return sum(1 for name in _child_dirs(path)
+               if _holds_wavefunction(os.path.join(path, name)))
+
+
+def _subtree_step_count(path, depth):
+    """Geometry points inside *path* or below it, stopping at *depth* levels down."""
+    total = _count_step_folders(path)
+    if depth > 0:
+        for name in _child_dirs(path):
+            child = os.path.join(path, name)
+            if not _holds_wavefunction(child):
+                total += _subtree_step_count(child, depth - 1)
+    return total
+
+
+def _system_name(path, root):
+    """The name a system root is known by: its folder, or the nearest folder above
+    it that names a system rather than describing its contents."""
+    candidate = os.path.abspath(path)
+    root = os.path.abspath(root)
+    while (_GENERIC_DIR_NAME.match(os.path.basename(candidate))
+           and os.path.dirname(candidate).startswith(root)
+           and os.path.dirname(candidate) != candidate
+           and candidate != root):
+        candidate = os.path.dirname(candidate)
+    return os.path.basename(candidate)
+
+
+def find_reg_systems(root='.', min_steps=2, max_depth=6):
+    """Find every directory below *root* that a REG analysis can be run in.
+
+    A directory is taken to be a system root when it holds at least *min_steps*
+    geometry points directly, or when it holds an auto_reg.config with that many
+    points somewhere beneath it — which is the layout in the wild, where the
+    config sits with the system and the numbered folders sit one level down in a
+    REG-IQA/ folder.  The search does not descend into a directory it has
+    claimed, so a system is never analysed twice, once as itself and once as
+    part of an ancestor.
+
+    Returns a list of dicts ordered by path, each with 'path' (absolute),
+    'name' (what the outputs are prefixed with), 'steps' and 'config'.
+    """
+    root = os.path.abspath(root)
+    found = []
+
+    def scan(directory, depth):
+        direct = _count_step_folders(directory)
+        has_config = os.path.isfile(os.path.join(directory, CONFIG_NAME))
+        steps = direct
+        if steps < min_steps and has_config:
+            steps = _subtree_step_count(directory, max_depth - depth)
+        if steps >= min_steps:
+            found.append({
+                'path': directory,
+                'name': sanitise_prefix(_system_name(directory, root)),
+                'steps': steps,
+                'config': has_config,
+            })
+            return  # claimed — its own numbered folders are not separate systems
+        if depth >= max_depth:
+            return
+        for name in _child_dirs(directory):
+            child = os.path.join(directory, name)
+            if not _holds_wavefunction(child):
+                scan(child, depth + 1)
+
+    scan(root, 0)
+    found.sort(key=lambda entry: entry['path'])
+    return found

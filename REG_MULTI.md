@@ -63,6 +63,22 @@ running IQF after IQA never overwrites what the IQA run produced. A standalone
 `reg-multi` writes to `REG_Multi_results/` unless `-o/--results-dir` says
 otherwise.
 
+To run over a whole folder of systems at once, `-R` analyses every system below a
+directory exactly as if you had cd'd into each and run the command there, naming
+each run's output after its system: `CLOBEN_REG_Multi_results/CLOBEN_REG_Multi.xlsx`.
+`--list-systems` shows what a sweep would cover, `-j N` runs N systems at a time,
+and `--prefix NAME` names the output of a single run. A sweep also gathers every
+system's bundle and config into `REG_sweep_collection/` where it was run, with an
+overview recording each system's scope, L_max, admitted pairs and unresolved
+fraction — the numbers a comparison across systems starts from.
+
+A standalone run on one system refreshes that system's own `REG_collection/`
+folder, so the multipole bundle joins the IQA and IQF bundles already collected
+there and the whole folder can be downloaded as one thing. `--no-collect` turns
+that off. A sweep run from `auto_reg.py`
+with `-R -m` gets the same treatment through the level-specific directory,
+`CLOBEN_REG_Multi_IQA_results/`. See the README for the rest.
+
 ## Fragments and scope
 
 Fragment definitions are read from `auto_reg.config`, unchanged:

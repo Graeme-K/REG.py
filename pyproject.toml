@@ -30,6 +30,7 @@ package-dir = {"" = "src"}
 py-modules = [
   "aimall_utils",
   "auto_reg",
+  "reg_batch",
   "default_settings",
   "dftd3_utils",
   "gaussian_utils",

@@ -10,7 +10,11 @@ Please, report bugs and issues to fabio.falcioni@manchester.ac.uk
 coded by F.Falcioni
 
 NOTE: The automatic analysis works if this file is run with python3 inside a folder containing all the REG points (
-saved in numbered folders) """
+saved in numbered folders)
+
+It can also be pointed at a folder of such folders with -R, which runs a full
+analysis on every system below it and names each run's output after its system.
+"""
 
 # IMPORT LIBRARIES
 import json
@@ -451,6 +455,124 @@ def _safe_sheet_name(name, used_names, max_len=31):
     raise RuntimeError("Could not generate a unique sheet name for: " + name)
 
 
+def _single_system_argv(option, reg_dir, prefix):
+    """The command line one system of a -R sweep is analysed with.
+
+    Rebuilt from the parsed options rather than by editing the sweep's own argv,
+    so that what each system runs is explicit and can be read straight off the
+    log.  A new option that should reach the systems belongs here as well as in
+    the parser.
+    """
+    argv = ['-d', reg_dir]
+    if option.IQF_TF:
+        argv += ['-f', option.IQF_TF]
+    if option.use_zeros:
+        argv.append('-z')
+    if option.table_rows:
+        argv += ['-n', str(option.table_rows)]
+    if option.multipole_visualization:
+        argv.append('--multipole-visualization')
+    if option.bundle_pair_budget is not None:
+        argv += ['--bundle-pair-budget', repr(float(option.bundle_pair_budget))]
+    if option.bundle_indent:
+        argv += ['--bundle-indent', str(option.bundle_indent)]
+    if option.reg_multi:
+        argv.append('-m')
+    if option.ignore_fragments:
+        argv.append('-i')
+    if option.multi_options:
+        argv += ['--multi-options', option.multi_options]
+    if prefix:
+        argv += ['--prefix', prefix]
+    # The sweep collects every system centrally at its root, so a system does not
+    # also copy its own bundles into a folder of its own.
+    argv.append('--no-collect')
+    return argv
+
+
+def _run_recursive(option, args, reg_dir):
+    """Run a full REG analysis on every system below a root directory.
+
+    Returns a process exit code: 0 when every system was analysed, 1 when any
+    of them failed.
+    """
+    import reg_batch  # type: ignore
+    import reg_setup  # type: ignore
+
+    root = os.path.abspath(args[0]) if args else os.getcwd()
+    if not os.path.isdir(root):
+        raise NotADirectoryError('Not a directory: ' + root)
+
+    systems = reg_batch.disambiguate(reg_setup.find_reg_systems(root), root)
+    level = 'REG_IQF' if option.IQF_TF == 'T' else 'REG_IQA'
+
+    def expected_dirs(system):
+        """The results directories a complete run on this system would leave behind."""
+        prefix = '' if option.no_prefix else system['name']
+        names = [reg_setup.prefixed(level + '_results', prefix)]
+        if option.reg_multi:
+            names.append(reg_setup.prefixed(
+                'REG_Multi_' + level.replace('REG_', '') + '_results', prefix))
+        return names
+
+    def results_dirs(system):
+        """Of those, the ones this system already holds."""
+        return [name for name in expected_dirs(system)
+                if os.path.isdir(os.path.join(system['path'], name))]
+
+    def is_complete(system):
+        """Skipping needs every directory the run would produce, not just one of
+        them: a system whose IQA finished but whose REG_Multi did not is not done."""
+        return len(results_dirs(system)) == len(expected_dirs(system))
+
+    reg_batch.print_plan(systems, root, results_names=results_dirs)
+    if option.list_systems:
+        return 0
+    if not systems:
+        return 1
+
+    if option.skip_existing:
+        keep = [system for system in systems if not is_complete(system)]
+        if len(keep) != len(systems):
+            print('  --skip-existing: {n} system(s) already analysed and left alone'.format(
+                n=len(systems) - len(keep)))
+            print('')
+        systems = keep
+        if not systems:
+            print('  Nothing left to do.')
+            return 0
+
+    def collect(results):
+        if option.no_collect:
+            return
+        reg_batch.collect_sweep(results, root,
+                                dir_name=option.collect_dir or reg_batch.COLLECTION_DIR,
+                                level=level, command=[sys.argv[0]] + list(sys.argv[1:]))
+
+    if option.collect_only:
+        # Nothing is analysed: the systems are taken as they stand, so an overview
+        # can be built over a tree that was swept days ago.
+        collect([{'system': system, 'returncode': None, 'minutes': None, 'log': None}
+                 for system in systems])
+        return 0
+
+    script = os.path.abspath(__file__)
+    logs = reg_batch.log_directory(root)
+    print('  Logs: ' + logs)
+    print('')
+
+    def command_for(system):
+        prefix = '' if option.no_prefix else system['name']
+        return [sys.executable, script] + _single_system_argv(option, reg_dir, prefix)
+
+    def log_path_for(system):
+        return os.path.join(logs, system['name'] + '_reg.log')
+
+    results = reg_batch.run_batch(systems, command_for, log_path_for, jobs=option.jobs)
+    collect(results)
+    return reg_batch.exit_code(results)
+
+
 def main(argv=None):
     usage = "usage: %prog [options] arg"
     parser = OptionParser(usage)
@@ -498,6 +620,53 @@ def main(argv=None):
                              "--multi-options='--scope all --lmax 4'. Per-system settings are "
                              "better put in auto_reg.config as MULTI lines, so that the same "
                              "command reproduces the same analysis from the directory alone")
+    parser.add_option("-R", "--recursive", action='store_true', dest='recursive', default=False,
+                        help="Run a full REG analysis on every system in a folder of systems, "
+                             "each one exactly as if you had cd'd into it and run this command "
+                             "there. The root folder is given as the argument, or is the current "
+                             "directory if none is given. A system is a directory holding an "
+                             "auto_reg.config with numbered geometry folders beneath it, or one "
+                             "holding at least two numbered folders that each contain a "
+                             ".wfn/.wfx. Every folder and file the run creates is named after the "
+                             "system, so the results of the whole sweep can be collected in one "
+                             "place. All the other options apply to each system in turn")
+    parser.add_option("--list-systems", action='store_true', dest='list_systems', default=False,
+                        help="With -R: list the systems that would be analysed, and the name "
+                             "each one's output would carry, then stop without analysing anything")
+    parser.add_option("--skip-existing", action='store_true', dest='skip_existing', default=False,
+                        help="With -R: leave alone any system that already holds every results "
+                             "directory this run would produce, so an interrupted sweep can be "
+                             "restarted without redoing the systems it finished. A system whose "
+                             "IQA finished but whose REG_Multi did not is redone")
+    parser.add_option("-j", "--jobs", action='store', type='int', dest='jobs', default=1,
+                        help="With -R: how many systems to analyse at the same time (default: 1). "
+                             "Each runs in its own process; with more than one, each system's "
+                             "output goes to its own log file instead of the terminal")
+    parser.add_option("--prefix", action='store', type='string', dest='prefix', default=None,
+                        help="Put NAME in front of every folder and file this run creates: "
+                             "NAME_REG_IQA_results/, NAME_REG.xlsx, NAME_REG_IQA_model_transfer.json "
+                             "and so on. -R sets this to the system's folder name for each system, "
+                             "so it is only needed for a single run analysed on its own")
+    parser.add_option("--no-prefix", action='store_true', dest='no_prefix', default=False,
+                        help="With -R: keep the usual unprefixed output names in each system's "
+                             "own directory instead of naming them after the system")
+    parser.add_option("--collect-dir", action='store', type='string', dest='collect_dir',
+                        default=None,
+                        help="Name the folder this run's model-transfer bundles and "
+                             "auto_reg.config are copied into, together with an overview file "
+                             "describing them (default: REG_collection in the system's own "
+                             "directory, or REG_sweep_collection at the root of a -R sweep). An "
+                             "absolute path puts it anywhere")
+    parser.add_option("--no-collect", action='store_true', dest='no_collect', default=False,
+                        help="Do not gather the bundles and config into a folder of their own; "
+                             "leave the results where they are")
+    parser.add_option("--collect-only", action='store_true', dest='collect_only', default=False,
+                        help="Analyse nothing, and gather what is already on disk into the "
+                             "collection folder: with -R every system below the root, otherwise "
+                             "the one directory given as the argument or the current one. Builds "
+                             "the folder and its overview for work that was run earlier")
+    # Note for anyone adding options here: an option a -R sweep should hand to each
+    # system belongs in _single_system_argv() as well as in this parser.
 
     (option, args) = parser.parse_args(args=argv)
 
@@ -514,6 +683,31 @@ def main(argv=None):
     import reg
     import reg_setup # type: ignore
     import reg_vis as rv # type: ignore
+
+    ###############################################################################
+    #                                                                             #
+    #                      A FOLDER OF SYSTEMS (-R / --recursive)                 #
+    #                                                                             #
+    ###############################################################################
+    # Handled before anything else reads the current directory: in this mode this
+    # process analyses nothing itself, it finds the systems and runs one copy of
+    # this same command inside each of them.
+    if option.recursive:
+        return _run_recursive(option, args, reg_dir)
+
+    # Collecting one directory without analysing it: the folder is rebuilt from
+    # the bundles already there, which is how a directory worked in over several
+    # days is turned into something to download without re-running anything.
+    if option.collect_only:
+        import reg_batch  # type: ignore
+        target = os.path.abspath(args[0]) if args else os.getcwd()
+        if not os.path.isdir(target):
+            raise NotADirectoryError('Not a directory: ' + target)
+        prefix = reg_setup.sanitise_prefix(option.prefix) if option.prefix else ''
+        reg_batch.collect_run(target, name=prefix or None, dir_prefix=prefix,
+                              dir_name=option.collect_dir,
+                              command=[sys.argv[0]] + list(sys.argv[1:]))
+        return 0
 
     ### STARTING TIMER ###
     start_time = time.time()
@@ -595,6 +789,16 @@ def main(argv=None):
             raise FileNotFoundError(
                 "Error: no fragment definitions found — auto_reg.config is missing from the directory "
                 "or contains no 'FRAG ID ... FRAG ATOMS [...]' entries")
+
+    # A sweep over a folder of systems (-R) gives every run the name of its own
+    # system, so forty analyses that would all have written REG_IQA_results/ and
+    # REG.xlsx can be collected in one place.  Carrying it in SYS puts the name on
+    # the results directory, the transfer bundle and the figure titles at once;
+    # everything else the run writes is renamed to match when the run is done.
+    PREFIX = reg_setup.sanitise_prefix(option.prefix) if option.prefix else ''
+    if PREFIX:
+        SYS = PREFIX + '_' + SYS
+        print('Output of this run is named after the system: {p}_...'.format(p=PREFIX))
 
     #List_of_frags = [[1,3,5,7,9,11],[2,4,6,8,10,12],[13]]
     #Frag_names = ["C(pi)","H(pi)","F-"]
@@ -902,6 +1106,16 @@ def main(argv=None):
         for i in range(0, len(reg_folders)):
             xyz_file = xyz_files[i]
             disp_u.run_DFT_D3(DFT_D3_PATH, reg_root_list[i], xyz_file, DISP_FUNCTIONAL,BJ_DAMPING)
+        # DFT-D3 drops a histo.dat in whatever directory it was started from, which
+        # is this system's own directory rather than the results directory.  It is
+        # named after the system too, so a sweep leaves one per system instead of
+        # each system overwriting a shared one.
+        if PREFIX and os.path.isfile(os.path.join(cwd, 'histo.dat')):
+            try:
+                os.replace(os.path.join(cwd, 'histo.dat'),
+                           os.path.join(cwd, PREFIX + '_histo.dat'))
+            except OSError as histo_error:
+                print('WARNING: could not rename histo.dat — ' + str(histo_error))
         folders_disp = [reg_root_list[i] + '/dft-d3.log' for i in range(0, len(reg_folders))]
         # GET INTER-ATOMIC DISPERSION TERMS:
         iqa_disp, iqa_disp_header = disp_u.disp_property_from_dftd3_file(folders_disp, atoms)
@@ -1911,6 +2125,20 @@ def main(argv=None):
 
     ###############################################################################
     #                                                                             #
+    #                    NAME THE OUTPUT AFTER THE SYSTEM                         #
+    #                                                                             #
+    ###############################################################################
+    # Done once everything this analysis writes is on disk, and before REG_Multi
+    # starts, so that a single sweep over the finished directory covers every file
+    # — including any added to the analysis later — rather than each of the
+    # forty-odd writes above having to remember the prefix for itself.  Nothing
+    # here is read back, so renaming is safe.
+    if PREFIX:
+        os.chdir(cwd)
+        reg_setup.apply_output_prefix(cwd + '/' + SYS + '_results', PREFIX, verbose=True)
+
+    ###############################################################################
+    #                                                                             #
     #                           REG_Multi ANALYSIS                                #
     #                                                                             #
     ###############################################################################
@@ -1929,8 +2157,12 @@ def main(argv=None):
         # A level-specific results directory, so running IQF after IQA does not
         # overwrite what the IQA run produced — the same reason REG_IQA_results and
         # REG_IQF_results are kept apart.
-        multi_results = 'REG_Multi_' + ('IQF' if IQF else 'IQA') + '_results'
-        multi_argv = ['-d', reg_dir, '-c', FRAG_CONFIG_PATH, '-o', multi_results]
+        multi_results = reg_setup.prefixed(
+            'REG_Multi_' + ('IQF' if IQF else 'IQA') + '_results', PREFIX)
+        multi_argv = ['-d', reg_dir, '-c', FRAG_CONFIG_PATH, '-o', multi_results,
+                      '--no-collect']
+        if PREFIX:
+            multi_argv += ['--prefix', PREFIX]
         multi_extra = shlex.split(option.multi_options) if option.multi_options else []
         if option.ignore_fragments and not any(
                 arg == '-i' or arg.startswith('--ignore-fragments') for arg in multi_extra):
@@ -1973,10 +2205,33 @@ def main(argv=None):
         finally:
             os.chdir(cwd)
 
+    ###############################################################################
+    #                                                                             #
+    #                          COLLECT THIS RUN                                   #
+    #                                                                             #
+    ###############################################################################
+    # Last, once REG_Multi has written its bundle too, so the folder holds
+    # everything this run produced rather than everything it had produced by the
+    # time the IQA analysis finished.  It is rebuilt from the directory each time,
+    # so running IQF or REG_Multi later refreshes it instead of leaving it stale.
+    if not option.no_collect:
+        os.chdir(cwd)
+        try:
+            import reg_batch  # type: ignore
+            reg_batch.collect_run(cwd, name=PREFIX, dir_prefix=PREFIX,
+                                  level='REG_IQF' if IQF else 'REG_IQA',
+                                  dir_name=option.collect_dir,
+                                  command=[sys.argv[0]] + list(sys.argv[1:]))
+        except Exception as collect_error:
+            # A naming convenience must not cost a completed analysis.
+            print('WARNING: could not collect this run — ' + str(collect_error))
+
     ###ENDING TIMER ###
     print("--- Total time for REG Analysis: {s} minutes ---".format(s=((time.time() - start_time) / 60)))
 
 
 if __name__ == "__main__":
-    main()
+    # The exit code matters for a -R sweep: it is non-zero when any system failed,
+    # so a sweep can be chained in a script without reading its output.
+    sys.exit(main())
 
